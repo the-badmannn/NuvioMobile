@@ -1,4 +1,4 @@
-name: Build Release APKs
+name: Build
 
 on:
   push:
@@ -11,48 +11,17 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v2
+        with:
+          submodules: false
 
-      - name: Set up JDK
-        uses: actions/setup-java@v4
+      - name: Setup JDK
+        uses: actions/setup-java@v2
         with:
           java-version: '11'
+          distribution: 'temurin'
 
-      - name: Create local.properties
-        run: |
-          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> local.properties
-          echo "SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}" >> local.properties
-          echo "TRAKT_CLIENT_ID=${{ secrets.TRAKT_CLIENT_ID }}" >> local.properties
-          echo "TRAKT_CLIENT_SECRET=${{ secrets.TRAKT_CLIENT_SECRET }}" >> local.properties
-          echo "INTRODB_API_URL=${{ secrets.INTRODB_API_URL }}" >> local.properties
-
-      - name: Build Playstore Release
-        run: ./gradlew :composeApp:assemblePlaystoreRelease
-
-      - name: Build Full Release
-        run: ./gradlew :composeApp:assembleFullRelease
-
-      - name: Upload Playstore Release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: playstore-release
-          path: composeApp/build/outputs/apk/playstore/release/*.apk
-
-      - name: Upload Full Release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: full-release
-          path: composeApp/build/outputs/apk/full/release/*.apk
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            composeApp/build/outputs/apk/playstore/release/*.apk
-            composeApp/build/outputs/apk/full/release/*.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Run Gradle build
+        run: ./composeApp/gradlew build
