@@ -1,0 +1,56 @@
+name: Build Release APKs
+
+on:
+  push:
+    branches:
+      - cmp-rewrite
+  pull_request:
+    branches:
+      - cmp-rewrite
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up JDK
+        uses: actions/setup-java@v2
+        with:
+          java-version: '11'
+
+      - name: Create local.properties
+        run: |
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> local.properties
+          echo "SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}" >> local.properties
+          echo "TRACT_CLIENT_ID=${{ secrets.TRAKT_CLIENT_ID }}" >> local.properties
+          echo "TRACT_CLIENT_SECRET=${{ secrets.TRAKT_CLIENT_SECRET }}" >> local.properties
+          echo "INTRODB_API_URL=${{ secrets.INTRODB_API_URL }}" >> local.properties
+
+      - name: Build Playstore Release
+        run: ./gradlew assemblePlaystoreRelease
+
+      - name: Build Full Release
+        run: ./gradlew assembleFullRelease
+
+      - name: Upload Playstore Release APK
+        uses: actions/upload-artifact@v2
+        with:
+          name: playstore-release
+          path: app/build/outputs/apk/playstore/release/app-playstore-release.apk
+
+      - name: Upload Full Release APK
+        uses: actions/upload-artifact@v2
+        with:
+          name: full-release
+          path: app/build/outputs/apk/full/release/app-full-release.apk
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag: ${{ github.ref }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        if: startsWith(github.ref, 'refs/tags/v')
