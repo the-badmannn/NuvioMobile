@@ -4,16 +4,18 @@ import co.touchlab.kermit.Logger
 import com.nuvio.app.features.addons.httpGetTextWithHeaders
 import com.nuvio.app.features.addons.httpRequestRaw
 import com.nuvio.app.features.details.MetaDetails
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
+import nuvio.composeapp.generated.resources.*
+import org.jetbrains.compose.resources.getString
 
 private const val COMMENTS_SORT = "likes"
 private const val COMMENTS_LIMIT = 100
 private const val COMMENTS_CACHE_TTL_MS = 10 * 60_000L
 private val INLINE_SPOILER_REGEX = Regex(
-    "\\[spoiler\\].*?\\[/spoiler\\]",
-    setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+    "(?is)\\[spoiler\\].*?\\[/spoiler\\]"
 )
 private val INLINE_SPOILER_TAG_REGEX = Regex("\\[/?spoiler\\]", RegexOption.IGNORE_CASE)
 
@@ -88,7 +90,9 @@ object TraktCommentsRepository {
             return TraktCommentsPage(emptyList(), page, 0, 0)
         }
         if (response.status !in 200..299) {
-            throw IllegalStateException("Failed to load Trakt comments (${response.status})")
+            throw IllegalStateException(
+                getString(Res.string.details_comments_trakt_load_failed_with_code, response.status),
+            )
         }
 
         val dtos = commentsJson.decodeFromString<List<TraktCommentDto>>(response.body)
@@ -224,7 +228,7 @@ private fun toReviewModel(dto: TraktCommentDto): TraktCommentReview {
     val authorDisplayName = dto.user?.name
         ?.takeIf { it.isNotBlank() }
         ?: dto.user?.username?.takeIf { it.isNotBlank() }
-        ?: "Trakt user"
+        ?: runBlocking { getString(Res.string.trakt_user_fallback) }
 
     return TraktCommentReview(
         id = dto.id,

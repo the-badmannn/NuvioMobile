@@ -2,6 +2,8 @@ package com.nuvio.app.features.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.appcompat.app.AppCompatDelegate
+import androidx.core.os.LocaleListCompat
 import com.nuvio.app.core.sync.decodeSyncBoolean
 import com.nuvio.app.core.sync.decodeSyncString
 import com.nuvio.app.core.sync.encodeSyncBoolean
@@ -15,12 +17,21 @@ actual object ThemeSettingsStorage {
     private const val preferencesName = "nuvio_theme_settings"
     private const val selectedThemeKey = "selected_theme"
     private const val amoledEnabledKey = "amoled_enabled"
-    private val syncKeys = listOf(selectedThemeKey, amoledEnabledKey)
+    private const val liquidGlassNativeTabBarEnabledKey = "liquid_glass_native_tab_bar_enabled"
+    private const val selectedAppLanguageKey = "selected_app_language"
+    private const val NAV_BAR_STYLE_KEY = "nav_bar_style"
+    private val profileScopedSyncKeys = listOf(
+        selectedThemeKey,
+        amoledEnabledKey,
+        liquidGlassNativeTabBarEnabledKey,
+        NAV_BAR_STYLE_KEY,
+    )
 
     private var preferences: SharedPreferences? = null
 
     fun initialize(context: Context) {
         preferences = context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
+        applySelectedAppLanguage(loadSelectedAppLanguage() ?: AppLanguage.DEVICE.code)
     }
 
     actual fun loadSelectedTheme(): String? =
@@ -46,17 +57,70 @@ actual object ThemeSettingsStorage {
             ?.apply()
     }
 
+    actual fun loadLiquidGlassNativeTabBarEnabled(): Boolean? =
+        preferences?.let { prefs ->
+            val key = ProfileScopedKey.of(liquidGlassNativeTabBarEnabledKey)
+            if (prefs.contains(key)) prefs.getBoolean(key, false) else null
+        }
+
+    actual fun saveLiquidGlassNativeTabBarEnabled(enabled: Boolean) {
+        preferences
+            ?.edit()
+            ?.putBoolean(ProfileScopedKey.of(liquidGlassNativeTabBarEnabledKey), enabled)
+            ?.apply()
+    }
+
+    actual fun loadSelectedAppLanguage(): String? {
+        val value = preferences?.getString(selectedAppLanguageKey, null)
+        if (value != null) return value
+        val legacy = preferences?.getString(ProfileScopedKey.of(selectedAppLanguageKey), null)
+        if (legacy != null) saveSelectedAppLanguage(legacy)
+        return legacy
+    }
+
+    actual fun saveSelectedAppLanguage(languageCode: String) {
+        preferences
+            ?.edit()
+            ?.putString(selectedAppLanguageKey, languageCode)
+            ?.apply()
+    }
+
+    actual fun applySelectedAppLanguage(languageCode: String) {
+        if (languageCode.equals("device", ignoreCase = true)) {
+            AppCompatDelegate.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
+        } else {
+            AppCompatDelegate.setApplicationLocales(
+                LocaleListCompat.forLanguageTags(languageCode),
+            )
+        }
+    }
+
+    actual fun loadNavBarStyle(): String? =
+        preferences?.getString(ProfileScopedKey.of(NAV_BAR_STYLE_KEY), null)
+
+    actual fun saveNavBarStyle(styleKey: String) {
+        preferences
+            ?.edit()
+            ?.putString(ProfileScopedKey.of(NAV_BAR_STYLE_KEY), styleKey)
+            ?.apply()
+    }
+
     actual fun exportToSyncPayload(): JsonObject = buildJsonObject {
         loadSelectedTheme()?.let { put(selectedThemeKey, encodeSyncString(it)) }
         loadAmoledEnabled()?.let { put(amoledEnabledKey, encodeSyncBoolean(it)) }
+        loadLiquidGlassNativeTabBarEnabled()?.let { put(liquidGlassNativeTabBarEnabledKey, encodeSyncBoolean(it)) }
+        loadNavBarStyle()?.let { put(NAV_BAR_STYLE_KEY, encodeSyncString(it)) }
     }
 
     actual fun replaceFromSyncPayload(payload: JsonObject) {
         preferences?.edit()?.apply {
-            syncKeys.forEach { remove(ProfileScopedKey.of(it)) }
+            profileScopedSyncKeys.forEach { remove(ProfileScopedKey.of(it)) }
         }?.apply()
 
         payload.decodeSyncString(selectedThemeKey)?.let(::saveSelectedTheme)
         payload.decodeSyncBoolean(amoledEnabledKey)?.let(::saveAmoledEnabled)
+        payload.decodeSyncBoolean(liquidGlassNativeTabBarEnabledKey)?.let(::saveLiquidGlassNativeTabBarEnabled)
+        payload.decodeSyncString(NAV_BAR_STYLE_KEY)?.let(::saveNavBarStyle)
+        applySelectedAppLanguage(loadSelectedAppLanguage() ?: AppLanguage.DEVICE.code)
     }
 }

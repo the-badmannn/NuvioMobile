@@ -3,6 +3,8 @@ package com.nuvio.app.features.trakt
 import co.touchlab.kermit.Logger
 import com.nuvio.app.features.addons.httpGetTextWithHeaders
 import com.nuvio.app.features.addons.httpPostJsonWithHeaders
+import com.nuvio.app.features.addons.httpRequestRaw
+import com.nuvio.app.features.profiles.ProfileRepository
 import io.ktor.http.Url
 import io.ktor.http.encodeURLParameter
 import kotlinx.coroutines.CancellationException
@@ -13,12 +15,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlin.random.Random
+import nuvio.composeapp.generated.resources.*
+import org.jetbrains.compose.resources.getString
+import org.jetbrains.compose.resources.StringResource
+import kotlinx.coroutines.runBlocking
 
 object TraktAuthRepository {
     private const val BASE_URL = "https://api.trakt.tv"
@@ -31,6 +39,7 @@ object TraktAuthRepository {
         encodeDefaults = true
     }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val refreshMutex = Mutex()
 
     private val _uiState = MutableStateFlow(TraktAuthUiState())
     val uiState: StateFlow<TraktAuthUiState> = _uiState.asStateFlow()
@@ -67,7 +76,7 @@ object TraktAuthRepository {
     fun onConnectRequested(): String? {
         ensureLoaded()
         if (!hasRequiredCredentials()) {
-            publish(errorMessage = "Missing Trakt credentials")
+            publish(errorMessage = localizedString(Res.string.trakt_missing_credentials))
             return null
         }
 
@@ -78,7 +87,7 @@ object TraktAuthRepository {
         )
         persist()
         publish(
-            statusMessage = "Complete Trakt sign in in your browser",
+            statusMessage = localizedString(Res.string.trakt_complete_sign_in_browser),
             errorMessage = null,
         )
 
@@ -183,7 +192,7 @@ object TraktAuthRepository {
             persist()
             publish(
                 isLoading = false,
-                errorMessage = "Invalid Trakt callback",
+                errorMessage = localizedString(Res.string.trakt_invalid_callback),
             )
             return
         }
@@ -191,7 +200,7 @@ object TraktAuthRepository {
         val errorCode = parsedUrl.parameters["error"]
         if (!errorCode.isNullOrBlank()) {
             val errorDescription = parsedUrl.parameters["error_description"]
-                ?: "Authorization denied"
+                ?: localizedString(Res.string.trakt_authorization_denied)
             clearPendingAuthorization()
             persist()
             publish(
@@ -207,7 +216,7 @@ object TraktAuthRepository {
             persist()
             publish(
                 isLoading = false,
-                errorMessage = "Trakt did not return an authorization code",
+                errorMessage = localizedString(Res.string.trakt_missing_auth_code),
             )
             return
         }
@@ -219,7 +228,7 @@ object TraktAuthRepository {
             persist()
             publish(
                 isLoading = false,
-                errorMessage = "Invalid Trakt callback state",
+                errorMessage = localizedString(Res.string.trakt_invalid_callback_state),
             )
             return
         }
@@ -251,7 +260,7 @@ object TraktAuthRepository {
         if (response == null) {
             clearPendingAuthorization()
             persist()
-            publish(isLoading = false, errorMessage = "Failed to complete Trakt sign in")
+            publish(isLoading = false, errorMessage = localizedString(Res.string.trakt_sign_in_complete_failed))
             return
         }
 
@@ -262,7 +271,7 @@ object TraktAuthRepository {
         if (parsed == null) {
             clearPendingAuthorization()
             persist()
-            publish(isLoading = false, errorMessage = "Invalid Trakt token response")
+            publish(isLoading = false, errorMessage = localizedString(Res.string.trakt_invalid_token_response))
             return
         }
 
@@ -279,7 +288,7 @@ object TraktAuthRepository {
         refreshUserSettings()
         publish(
             isLoading = false,
-            statusMessage = "Connected to Trakt",
+            statusMessage = localizedString(Res.string.trakt_connected_status),
             errorMessage = null,
         )
     }
@@ -308,21 +317,24 @@ object TraktAuthRepository {
             }
         }
 
+        TraktCredentialSync.deleteRemote()
         authState = TraktAuthState()
         persist()
         publish(
             isLoading = false,
-            statusMessage = "Disconnected from Trakt",
+            statusMessage = localizedString(Res.string.trakt_disconnected_status),
             errorMessage = null,
         )
     }
 
-    private suspend fun refreshTokenIfNeeded(force: Boolean): Boolean {
-        if (!hasRequiredCredentials()) return false
-        val refreshToken = authState.refreshToken?.takeIf { it.isNotBlank() } ?: return false
+    private suspend fun refreshTokenIfNeeded(force: Boolean): Boolean = refreshMutex.withLock {
+        if (!hasRequiredCredentials()) return@withLock false
+        val profileId = ProfileRepository.activeProfileId
+        val refreshToken = authState.refreshToken?.takeIf { it.isNotBlank() }
+            ?: return@withLock false
 
         if (!force && !isTokenExpiredOrExpiring(authState)) {
-            return true
+            return@withLock true
         }
 
         val body = json.encodeToString(
@@ -335,19 +347,42 @@ object TraktAuthRepository {
         )
 
         val response = runCatching {
-            httpPostJsonWithHeaders(
+            httpRequestRaw(
+                method = "POST",
                 url = "$BASE_URL/oauth/token",
                 body = body,
-                headers = emptyMap(),
+                headers = mapOf(
+                    "Accept" to "application/json",
+                    "Content-Type" to "application/json",
+                ),
             )
         }.onFailure { error ->
             if (error is CancellationException) throw error
-            log.w { "Trakt token refresh failed: ${error.message}" }
-        }.getOrNull() ?: return false
+            log.w { "Trakt token refresh transport failure: ${error.message}" }
+        }.getOrNull() ?: return@withLock false
+
+        if (ProfileRepository.activeProfileId != profileId || authState.refreshToken != refreshToken) {
+            return@withLock false
+        }
+
+        when (traktTokenRefreshResponseAction(response.status)) {
+            TraktTokenRefreshResponseAction.INVALIDATE -> {
+                log.w { "Trakt rejected the refresh token with HTTP 400; clearing local credentials" }
+                invalidateCredentials(profileId)
+                return@withLock false
+            }
+
+            TraktTokenRefreshResponseAction.TRANSIENT_FAILURE -> {
+                log.w { "Trakt token refresh failed with HTTP ${response.status}" }
+                return@withLock false
+            }
+
+            TraktTokenRefreshResponseAction.ACCEPT -> Unit
+        }
 
         val parsed = runCatching {
-            json.decodeFromString<TraktTokenResponse>(response)
-        }.getOrNull() ?: return false
+            json.decodeFromString<TraktTokenResponse>(response.body)
+        }.getOrNull() ?: return@withLock false
 
         authState = authState.copy(
             accessToken = parsed.accessToken,
@@ -358,7 +393,18 @@ object TraktAuthRepository {
         )
         persist()
         publish()
-        return true
+        true
+    }
+
+    private suspend fun invalidateCredentials(profileId: Int) {
+        authState = TraktAuthState()
+        persist()
+        publish(
+            isLoading = false,
+            statusMessage = null,
+            errorMessage = localizedString(Res.string.trakt_authorization_expired_reconnect),
+        )
+        TraktCredentialSync.deleteRemote(profileId)
     }
 
     private fun loadFromDisk() {
@@ -439,6 +485,19 @@ object TraktAuthRepository {
         val nowSeconds = TraktPlatformClock.nowEpochMs() / 1_000L
         return nowSeconds >= (expiresAtSeconds - 60)
     }
+
+}
+
+internal enum class TraktTokenRefreshResponseAction {
+    ACCEPT,
+    INVALIDATE,
+    TRANSIENT_FAILURE,
+}
+
+internal fun traktTokenRefreshResponseAction(status: Int): TraktTokenRefreshResponseAction = when {
+    status == 400 -> TraktTokenRefreshResponseAction.INVALIDATE
+    status in 200..299 -> TraktTokenRefreshResponseAction.ACCEPT
+    else -> TraktTokenRefreshResponseAction.TRANSIENT_FAILURE
 }
 
 @Serializable
@@ -490,3 +549,4 @@ private data class TraktUserDto(
 private data class TraktUserIdsDto(
     val slug: String? = null,
 )
+    private fun localizedString(resource: StringResource): String = runBlocking { getString(resource) }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -36,10 +37,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.nuvio.app.core.ui.nuvio
+import com.nuvio.app.core.ui.nuvioHorizontalScrollBleed
+import com.nuvio.app.core.ui.withDuplicateSafeLazyKeys
 import com.nuvio.app.features.trakt.TraktCommentReview
 import kotlinx.coroutines.flow.distinctUntilChanged
+import nuvio.composeapp.generated.resources.*
+import org.jetbrains.compose.resources.stringResource
 
 @Composable
 fun DetailCommentsSection(
@@ -53,6 +60,7 @@ fun DetailCommentsSection(
     onCommentClick: (TraktCommentReview) -> Unit,
     modifier: Modifier = Modifier,
     showHeader: Boolean = true,
+    horizontalScrollPadding: Dp = 0.dp,
 ) {
     val listState = rememberLazyListState()
 
@@ -78,7 +86,10 @@ fun DetailCommentsSection(
         when {
             isLoading -> {
                 LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .nuvioHorizontalScrollBleed(horizontalScrollPadding)
+                        .fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = horizontalScrollPadding),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     items(3) {
@@ -101,14 +112,14 @@ fun DetailCommentsSection(
                             contentColor = MaterialTheme.colorScheme.onSurface,
                         ),
                     ) {
-                        Text("Retry")
+                        Text(stringResource(Res.string.action_retry))
                     }
                 }
             }
 
             comments.isEmpty() -> {
                 Text(
-                    text = "No comments yet.",
+                    text = stringResource(Res.string.detail_comments_empty),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -116,11 +127,18 @@ fun DetailCommentsSection(
 
             else -> {
                 LazyRow(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .nuvioHorizontalScrollBleed(horizontalScrollPadding)
+                        .fillMaxWidth(),
                     state = listState,
+                    contentPadding = PaddingValues(horizontal = horizontalScrollPadding),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(comments, key = { it.id }) { review ->
+                    items(
+                        items = comments.withDuplicateSafeLazyKeys { it.id },
+                        key = { it.lazyKey },
+                    ) { keyedReview ->
+                        val review = keyedReview.value
                         CommentCard(
                             review = review,
                             onClick = { onCommentClick(review) },
@@ -144,7 +162,7 @@ private fun CommentsHeader() {
         val titleSize = if (isTablet) 22.sp else 20.sp
 
         Text(
-            text = "Trakt Comments",
+            text = stringResource(Res.string.detail_comments_title),
             style = MaterialTheme.typography.titleLarge.copy(
                 fontSize = titleSize,
                 fontWeight = FontWeight.SemiBold,
@@ -163,7 +181,7 @@ private fun CommentCard(
     val colorScheme = MaterialTheme.colorScheme
     val isAmoled = colorScheme.background == Color.Black && colorScheme.surface == Color(0xFF050505)
     val bodyText = if (review.hasSpoilerContent) {
-        "This comment contains spoilers."
+        stringResource(Res.string.detail_comments_spoiler_card)
     } else {
         review.comment
     }
@@ -197,34 +215,40 @@ private fun CommentCard(
                     fontWeight = FontWeight.SemiBold,
                 )
 
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (review.review) {
-                        CommentChip(text = "Review")
-                    }
-                    if (review.hasSpoilerContent) {
-                        CommentChip(text = "Spoiler")
-                    }
-                    review.rating?.let { rating ->
-                        CommentChip(text = "Rating $rating/10")
-                    }
+                if (review.review) {
+                    CommentChip(text = stringResource(Res.string.detail_comments_badge_review))
                 }
 
                 Text(
                     text = bodyText,
                     style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (review.hasSpoilerContent) {
+                        MaterialTheme.nuvio.colors.warning
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                     maxLines = 5,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
 
-                Text(
-                    text = "${review.likes} likes",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    review.rating?.let { rating ->
+                        Text(
+                            text = stringResource(Res.string.detail_comments_badge_rating, rating),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            maxLines = 1,
+                        )
+                    }
+                    Text(
+                        text = stringResource(Res.string.detail_comments_likes, review.likes),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }

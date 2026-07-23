@@ -1,29 +1,21 @@
 package com.nuvio.app.features.player
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -31,12 +23,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,31 +34,57 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.nuvio.app.core.format.formatReleaseDateForDisplay
+import com.nuvio.app.core.ui.NuvioAnimatedWatchedBadge
+import com.nuvio.app.core.ui.NuvioTokens
+import com.nuvio.app.core.ui.nuvio
+import com.nuvio.app.features.debrid.DebridSettingsRepository
 import com.nuvio.app.features.details.MetaVideo
+import com.nuvio.app.features.streams.StreamBadgeSettingsRepository
+import com.nuvio.app.features.streams.StreamCard
 import com.nuvio.app.features.streams.StreamItem
 import com.nuvio.app.features.streams.StreamsUiState
+import com.nuvio.app.features.streams.isSelectableForPlayback
+import com.nuvio.app.features.watchprogress.WatchProgressEntry
+import com.nuvio.app.features.watchprogress.buildPlaybackVideoId
+import com.nuvio.app.features.watching.application.WatchingState
+import nuvio.composeapp.generated.resources.Res
+import nuvio.composeapp.generated.resources.action_back
+import nuvio.composeapp.generated.resources.action_close
+import nuvio.composeapp.generated.resources.collections_tab_all
+import nuvio.composeapp.generated.resources.compose_action_reload
+import nuvio.composeapp.generated.resources.compose_player_episode_code_episode_only
+import nuvio.composeapp.generated.resources.compose_player_episode_code_full
+import nuvio.composeapp.generated.resources.compose_player_no_episodes_available
+import nuvio.composeapp.generated.resources.compose_player_no_streams_found
+import nuvio.composeapp.generated.resources.compose_player_panel_episodes
+import nuvio.composeapp.generated.resources.compose_player_panel_streams
+import nuvio.composeapp.generated.resources.compose_player_playing
+import nuvio.composeapp.generated.resources.episodes_season
+import nuvio.composeapp.generated.resources.episodes_specials
+import org.jetbrains.compose.resources.stringResource
 
-/**
- * Episode selection panel shown inside the player.
- * First shows the episode list; when an episode is tapped the sub-view
- * loads streams for that episode and lets the user pick one.
- */
 @Composable
 fun PlayerEpisodesPanel(
     visible: Boolean,
     episodes: List<MetaVideo>,
+    parentMetaType: String,
+    parentMetaId: String,
     currentSeason: Int?,
     currentEpisode: Int?,
-    // episode stream sub-view state
+    progressByVideoId: Map<String, WatchProgressEntry>,
+    watchedKeys: Set<String>,
+    blurUnwatchedEpisodes: Boolean,
     episodeStreamsState: EpisodeStreamsPanelState,
     onSeasonSelected: (Int) -> Unit,
     onEpisodeSelected: (MetaVideo) -> Unit,
@@ -83,63 +95,54 @@ fun PlayerEpisodesPanel(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val colorScheme = MaterialTheme.colorScheme
-
-    AnimatedVisibility(
+    PlayerSidePanel(
         visible = visible,
-        enter = fadeIn(tween(200)),
-        exit = fadeOut(tween(200)),
+        onDismiss = onDismiss,
+        modifier = modifier,
     ) {
-        Box(
-            modifier = modifier
+        Column(
+            modifier = Modifier
                 .fillMaxSize()
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() },
+                .padding(24.dp),
+        ) {
+            PlayerPanelHeader(
+                title = if (episodeStreamsState.showStreams) {
+                    stringResource(Res.string.compose_player_panel_streams)
+                } else {
+                    stringResource(Res.string.compose_player_panel_episodes)
+                },
+            ) {
+                PlayerDialogButton(
+                    label = stringResource(Res.string.action_close),
                     onClick = onDismiss,
                 )
-                .background(colorScheme.scrim.copy(alpha = 0.52f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            AnimatedVisibility(
-                visible = visible,
-                enter = slideInVertically(tween(300)) { it / 3 } + fadeIn(tween(300)),
-                exit = slideOutVertically(tween(250)) { it / 3 } + fadeOut(tween(250)),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .widthIn(max = 520.dp)
-                        .fillMaxWidth(0.92f)
-                        .heightIn(max = 620.dp)
-                        .clip(RoundedCornerShape(24.dp))
-                        .background(colorScheme.surface)
-                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.8f), RoundedCornerShape(24.dp))
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() },
-                            onClick = {},
-                        ),
-                ) {
-                    if (episodeStreamsState.showStreams) {
-                        EpisodeStreamsSubView(
-                            state = episodeStreamsState,
-                            onFilterSelected = onEpisodeStreamFilterSelected,
-                            onStreamSelected = onEpisodeStreamSelected,
-                            onBack = onBackToEpisodes,
-                            onReload = onReloadEpisodeStreams,
-                            onDismiss = onDismiss,
-                        )
-                    } else {
-                        EpisodesListSubView(
-                            episodes = episodes,
-                            currentSeason = currentSeason,
-                            currentEpisode = currentEpisode,
-                            onSeasonSelected = onSeasonSelected,
-                            onEpisodeSelected = onEpisodeSelected,
-                            onDismiss = onDismiss,
-                        )
-                    }
-                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            if (episodeStreamsState.showStreams) {
+                EpisodeStreamsPanelContent(
+                    state = episodeStreamsState,
+                    onFilterSelected = onEpisodeStreamFilterSelected,
+                    onStreamSelected = onEpisodeStreamSelected,
+                    onBack = onBackToEpisodes,
+                    onReload = onReloadEpisodeStreams,
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                EpisodesListPanelContent(
+                    episodes = episodes,
+                    parentMetaType = parentMetaType,
+                    parentMetaId = parentMetaId,
+                    currentSeason = currentSeason,
+                    currentEpisode = currentEpisode,
+                    progressByVideoId = progressByVideoId,
+                    watchedKeys = watchedKeys,
+                    blurUnwatchedEpisodes = blurUnwatchedEpisodes,
+                    onSeasonSelected = onSeasonSelected,
+                    onEpisodeSelected = onEpisodeSelected,
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
     }
@@ -151,28 +154,28 @@ data class EpisodeStreamsPanelState(
     val streamsUiState: StreamsUiState = StreamsUiState(),
 )
 
-// ── Episode List View ──────────────────────────────────────────────
-
 @Composable
-private fun EpisodesListSubView(
+private fun EpisodesListPanelContent(
     episodes: List<MetaVideo>,
+    parentMetaType: String,
+    parentMetaId: String,
     currentSeason: Int?,
     currentEpisode: Int?,
+    progressByVideoId: Map<String, WatchProgressEntry>,
+    watchedKeys: Set<String>,
+    blurUnwatchedEpisodes: Boolean,
     onSeasonSelected: (Int) -> Unit,
     onEpisodeSelected: (MetaVideo) -> Unit,
-    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val colorScheme = MaterialTheme.colorScheme
-
+    val tokens = MaterialTheme.nuvio
     val groupedEpisodes = remember(episodes) {
         episodes
             .filter { it.season != null || it.episode != null }
             .groupBy { it.season?.coerceAtLeast(0) ?: 0 }
     }
     val availableSeasons = remember(groupedEpisodes) {
-        val regular = groupedEpisodes.keys.filter { it > 0 }.sorted()
-        val specials = groupedEpisodes.keys.filter { it == 0 }
-        regular + specials
+        groupedEpisodes.keys.filter { it > 0 }.sorted() + groupedEpisodes.keys.filter { it == 0 }
     }
     var selectedSeason by remember(currentSeason, availableSeasons) {
         mutableIntStateOf(
@@ -184,76 +187,54 @@ private fun EpisodesListSubView(
         )
     }
     val seasonEpisodes = remember(groupedEpisodes, selectedSeason) {
-        (groupedEpisodes[selectedSeason] ?: emptyList())
-            .sortedBy { it.episode ?: 0 }
+        (groupedEpisodes[selectedSeason] ?: emptyList()).sortedBy { it.episode ?: 0 }
     }
     val seasonListState = rememberLazyListState()
     val episodeListState = rememberLazyListState()
-    var hasPositionedSeasonRow by remember(availableSeasons) { mutableStateOf(false) }
-    var hasPositionedEpisodeList by remember(selectedSeason) { mutableStateOf(false) }
+    var positionedSeasonRow by remember(availableSeasons) { mutableStateOf(false) }
+    var positionedEpisodeList by remember(selectedSeason) { mutableStateOf(false) }
 
     LaunchedEffect(selectedSeason, availableSeasons) {
-        val selectedSeasonIndex = availableSeasons.indexOf(selectedSeason)
-        if (selectedSeasonIndex >= 0) {
-            if (hasPositionedSeasonRow) {
-                seasonListState.animateScrollToItem(selectedSeasonIndex)
-            } else {
-                seasonListState.scrollToItem(selectedSeasonIndex)
-                hasPositionedSeasonRow = true
+        val index = availableSeasons.indexOf(selectedSeason)
+        if (index >= 0) {
+            if (positionedSeasonRow) seasonListState.animateScrollToItem(index)
+            else {
+                seasonListState.scrollToItem(index)
+                positionedSeasonRow = true
             }
         }
     }
 
     LaunchedEffect(selectedSeason, seasonEpisodes, currentSeason, currentEpisode) {
         if (seasonEpisodes.isEmpty()) return@LaunchedEffect
-        val activeEpisodeIndex = if (selectedSeason == currentSeason && currentEpisode != null) {
-            seasonEpisodes.indexOfFirst { episode ->
-                episode.season == currentSeason && episode.episode == currentEpisode
-            }
+        val currentIndex = if (selectedSeason == currentSeason && currentEpisode != null) {
+            seasonEpisodes.indexOfFirst { it.season == currentSeason && it.episode == currentEpisode }
         } else {
             -1
         }
-        val targetIndex = activeEpisodeIndex.takeIf { it >= 0 } ?: 0
-        if (hasPositionedEpisodeList) {
-            episodeListState.animateScrollToItem(targetIndex)
-        } else {
+        val targetIndex = currentIndex.takeIf { it >= 0 } ?: 0
+        if (positionedEpisodeList) episodeListState.animateScrollToItem(targetIndex)
+        else {
             episodeListState.scrollToItem(targetIndex)
-            hasPositionedEpisodeList = true
+            positionedEpisodeList = true
         }
     }
 
-    Column {
-        // Header
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "Episodes",
-                color = colorScheme.onSurface,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-            )
-            PanelChipButton(label = "Close", onClick = onDismiss)
-        }
-
-        // Season tabs
-        if (availableSeasons.size > 1) {
+    Column(modifier = modifier) {
+        if (availableSeasons.isNotEmpty()) {
             LazyRow(
                 state = seasonListState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
-                    .padding(bottom = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
             ) {
-                items(availableSeasons, key = { season -> season }) { season ->
-                    val label = if (season == 0) "Specials" else "Season $season"
-                    AddonFilterChip(
-                        label = label,
+                items(availableSeasons, key = { it }) { season ->
+                    EpisodeSeasonChip(
+                        label = if (season == 0) {
+                            stringResource(Res.string.episodes_specials)
+                        } else {
+                            stringResource(Res.string.episodes_season, season)
+                        },
                         isSelected = selectedSeason == season,
                         onClick = {
                             selectedSeason = season
@@ -262,34 +243,52 @@ private fun EpisodesListSubView(
                     )
                 }
             }
+            Spacer(Modifier.height(12.dp))
         }
 
-        // Episode list
         if (seasonEpisodes.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 40.dp),
+                    .weight(1f),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "No episodes available",
-                    color = colorScheme.onSurfaceVariant,
-                    fontSize = 14.sp,
+                    text = stringResource(Res.string.compose_player_no_episodes_available),
+                    color = tokens.colors.textMuted,
+                    style = MaterialTheme.typography.bodyMedium,
                 )
             }
         } else {
             LazyColumn(
                 state = episodeListState,
-                modifier = Modifier.padding(horizontal = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp),
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(top = 4.dp, bottom = 8.dp),
             ) {
-                items(seasonEpisodes, key = { "${it.season}:${it.episode}:${it.id}" }) { episode ->
+                itemsIndexed(
+                    items = seasonEpisodes,
+                    key = { index, episode -> "${episode.season}:${episode.episode}:${episode.id}#$index" },
+                ) { _, episode ->
                     val isCurrent = episode.season == currentSeason && episode.episode == currentEpisode
+                    val episodeVideoId = buildPlaybackVideoId(
+                        parentMetaId = parentMetaId,
+                        seasonNumber = episode.season,
+                        episodeNumber = episode.episode,
+                        fallbackVideoId = episode.id,
+                    )
+                    val isWatched = progressByVideoId[episodeVideoId]?.isEffectivelyCompleted == true ||
+                        WatchingState.isEpisodeWatched(
+                            watchedKeys = watchedKeys,
+                            metaType = parentMetaType,
+                            metaId = parentMetaId,
+                            episode = episode,
+                        )
                     EpisodeRow(
                         episode = episode,
                         isCurrent = isCurrent,
+                        isWatched = isWatched,
+                        blurUnwatchedEpisodes = blurUnwatchedEpisodes,
                         onClick = { onEpisodeSelected(episode) },
                     )
                 }
@@ -299,94 +298,140 @@ private fun EpisodesListSubView(
 }
 
 @Composable
+private fun EpisodeSeasonChip(
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+) {
+    val tokens = MaterialTheme.nuvio
+    val shape = RoundedCornerShape(24.dp)
+
+    Box(
+        modifier = Modifier
+            .clip(shape)
+            .background(if (isSelected) Color(0xFFF5F5F5) else tokens.colors.surfaceCard)
+            .border(
+                1.dp,
+                if (isSelected) Color.Transparent else tokens.colors.borderDefault,
+                shape,
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 10.dp),
+    ) {
+        Text(
+            text = label,
+            color = if (isSelected) Color.Black else tokens.colors.textSecondary,
+            style = MaterialTheme.typography.labelLarge,
+        )
+    }
+}
+
+@Composable
 private fun EpisodeRow(
     episode: MetaVideo,
     isCurrent: Boolean,
+    isWatched: Boolean,
+    blurUnwatchedEpisodes: Boolean,
     onClick: () -> Unit,
 ) {
-    val colorScheme = MaterialTheme.colorScheme
+    val tokens = MaterialTheme.nuvio
+    val cardShape = RoundedCornerShape(16.dp)
+    val shouldBlurArtwork = blurUnwatchedEpisodes && !isWatched && !isCurrent
+    val playingDescription = stringResource(Res.string.compose_player_playing)
+    val episodeCode = when {
+        episode.season != null && episode.episode != null -> stringResource(
+            Res.string.compose_player_episode_code_full,
+            episode.season,
+            episode.episode,
+        )
+        episode.episode != null -> stringResource(
+            Res.string.compose_player_episode_code_episode_only,
+            episode.episode,
+        )
+        else -> null
+    }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(
-                if (isCurrent) colorScheme.primaryContainer.copy(alpha = 0.55f) else Color.Transparent,
-            )
+            .clip(cardShape)
+            .background(tokens.colors.surfaceCard)
             .then(
                 if (isCurrent) {
-                    Modifier.border(1.dp, colorScheme.primary.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+                    Modifier.border(width = 2.dp, color = tokens.colors.focusRing, shape = cardShape)
                 } else {
                     Modifier
                 },
             )
+            .semantics {
+                if (isCurrent) stateDescription = playingDescription
+            }
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(10.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // Thumbnail
-        if (episode.thumbnail != null) {
-            AsyncImage(
-                model = episode.thumbnail,
-                contentDescription = null,
+        Box(
+            modifier = Modifier
+                .width(130.dp)
+                .height(90.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(tokens.colors.surfacePopover),
+        ) {
+            episode.thumbnail?.let { thumbnail ->
+                AsyncImage(
+                    model = thumbnail,
+                    contentDescription = episode.title,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(if (shouldBlurArtwork) Modifier.blur(NuvioTokens.Space.s18) else Modifier),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+            if (episodeCode != null) {
+                Text(
+                    text = episodeCode,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(8.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color.Black.copy(alpha = 0.75f))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                )
+            }
+            NuvioAnimatedWatchedBadge(
+                isVisible = isWatched,
                 modifier = Modifier
-                    .width(80.dp)
-                    .height(48.dp)
-                    .clip(RoundedCornerShape(8.dp)),
-                contentScale = ContentScale.Crop,
+                    .align(Alignment.TopEnd)
+                    .padding(8.dp),
             )
         }
 
-        Column(modifier = Modifier.weight(1f)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                val episodeLabel = buildString {
-                    if (episode.season != null && episode.episode != null) {
-                        append("S${episode.season}E${episode.episode}")
-                    } else if (episode.episode != null) {
-                        append("E${episode.episode}")
-                    }
-                }
-                if (episodeLabel.isNotBlank()) {
-                    Text(
-                        text = episodeLabel,
-                        color = colorScheme.onSurfaceVariant,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-                if (isCurrent) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(colorScheme.primaryContainer)
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            text = "Playing",
-                            color = colorScheme.onPrimaryContainer,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
-                }
-            }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             Text(
                 text = episode.title,
-                color = colorScheme.onSurface,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium,
+                color = tokens.colors.textPrimary,
+                style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            episode.overview?.let { overview ->
+            episode.released?.takeIf { it.isNotBlank() }?.let { released ->
+                Text(
+                    text = formatReleaseDateForDisplay(released),
+                    color = tokens.colors.textMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            episode.overview?.takeIf { it.isNotBlank() }?.let { overview ->
                 Text(
                     text = overview,
-                    color = colorScheme.onSurfaceVariant,
-                    fontSize = 11.sp,
+                    color = tokens.colors.textSecondary,
+                    style = MaterialTheme.typography.bodySmall,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -395,207 +440,91 @@ private fun EpisodeRow(
     }
 }
 
-// ── Episode Streams Sub-View ──────────────────────────────────────
-
 @Composable
-private fun EpisodeStreamsSubView(
+private fun EpisodeStreamsPanelContent(
     state: EpisodeStreamsPanelState,
     onFilterSelected: (String?) -> Unit,
     onStreamSelected: (StreamItem, MetaVideo) -> Unit,
     onBack: () -> Unit,
     onReload: () -> Unit,
-    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    val colorScheme = MaterialTheme.colorScheme
-
+    val tokens = MaterialTheme.nuvio
     val episode = state.selectedEpisode ?: return
     val streamsUiState = state.streamsUiState
 
-    Column {
-        // Header
+    Column(modifier = modifier) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
-                text = "Streams",
-                color = colorScheme.onSurface,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-            )
-            PanelChipButton(label = "Close", onClick = onDismiss)
-        }
-
-        // Back + reload + episode info
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            PanelChipButton(
-                label = "Back",
-                icon = Icons.AutoMirrored.Rounded.ArrowBack,
+            PlayerDialogButton(
+                label = stringResource(Res.string.action_back),
                 onClick = onBack,
             )
-            PanelChipButton(
-                label = "Reload",
-                icon = Icons.Rounded.Refresh,
+            PlayerDialogButton(
+                label = stringResource(Res.string.compose_action_reload),
                 onClick = onReload,
             )
             Text(
                 text = buildString {
                     if (episode.season != null && episode.episode != null) {
-                        append("S${episode.season} E${episode.episode}")
+                        append(
+                            stringResource(
+                                Res.string.compose_player_episode_code_full,
+                                episode.season,
+                                episode.episode,
+                            ),
+                        )
                     }
                     if (episode.title.isNotBlank()) {
                         if (isNotEmpty()) append(" • ")
                         append(episode.title)
                     }
                 },
-                color = colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
+                color = tokens.colors.textSecondary,
+                style = MaterialTheme.typography.bodyLarge,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
         }
 
-        // Addon filter chips
-        val addonNames = remember(streamsUiState.groups) {
-            streamsUiState.groups.map { it.addonName }.distinct()
-        }
-        if (addonNames.size > 1) {
+        Spacer(Modifier.height(16.dp))
+
+        if (streamsUiState.groups.isNotEmpty()) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp)
-                    .padding(bottom = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 AddonFilterChip(
-                    label = "All",
+                    label = stringResource(Res.string.collections_tab_all),
                     isSelected = streamsUiState.selectedFilter == null,
                     onClick = { onFilterSelected(null) },
                 )
-                addonNames.forEach { addon ->
-                    val group = streamsUiState.groups.firstOrNull { it.addonName == addon }
+                streamsUiState.groups.forEach { group ->
                     AddonFilterChip(
-                        label = addon,
-                        isSelected = streamsUiState.selectedFilter == group?.addonId,
-                        isLoading = group?.isLoading == true,
-                        hasError = group?.error != null,
-                        onClick = { onFilterSelected(group?.addonId) },
+                        label = group.addonName,
+                        isSelected = streamsUiState.selectedFilter == group.addonId,
+                        isLoading = group.isLoading,
+                        hasError = group.error != null,
+                        onClick = { onFilterSelected(group.addonId) },
                     )
                 }
             }
         }
 
-        // Streams
-        when {
-            streamsUiState.isAnyLoading && streamsUiState.allStreams.isEmpty() -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 40.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(
-                        color = colorScheme.primary,
-                        strokeWidth = 2.dp,
-                        modifier = Modifier.size(28.dp),
-                    )
-                }
-            }
+        Spacer(Modifier.height(16.dp))
 
-            streamsUiState.allStreams.isEmpty() -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 40.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "No streams found",
-                        color = colorScheme.onSurfaceVariant,
-                        fontSize = 14.sp,
-                    )
-                }
-            }
-
-            else -> {
-                val streams = streamsUiState.filteredGroups.flatMap { it.streams }
-                LazyColumn(
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp),
-                ) {
-                    itemsIndexed(
-                        items = streams,
-                        key = { index, stream -> "${stream.addonId}::${index}::${stream.url ?: stream.infoHash ?: stream.name}" },
-                    ) { _, stream ->
-                        EpisodeSourceStreamRow(
-                            stream = stream,
-                            onClick = { onStreamSelected(stream, episode) },
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun EpisodeSourceStreamRow(
-    stream: StreamItem,
-    onClick: () -> Unit,
-) {
-    val colorScheme = MaterialTheme.colorScheme
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(colorScheme.surfaceVariant.copy(alpha = 0.35f))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = stream.streamLabel,
-                color = colorScheme.onSurface,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            stream.streamSubtitle?.let { subtitle ->
-                if (subtitle != stream.streamLabel) {
-                    Text(
-                        text = subtitle,
-                        color = colorScheme.onSurfaceVariant,
-                        fontSize = 12.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            Text(
-                text = stream.addonName,
-                color = colorScheme.onSurfaceVariant,
-                fontSize = 11.sp,
-                fontStyle = FontStyle.Italic,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        PlayerStreamList(
+            streamsUiState = streamsUiState,
+            onStreamSelected = { stream -> onStreamSelected(stream, episode) },
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(top = 4.dp, bottom = 8.dp),
+        )
     }
 }

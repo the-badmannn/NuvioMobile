@@ -1,6 +1,8 @@
 package com.nuvio.app.features.downloads
 
 import android.content.Context
+import android.content.Intent
+import androidx.core.content.FileProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -8,9 +10,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import nuvio.composeapp.generated.resources.*
+import org.jetbrains.compose.resources.getString
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URI
@@ -44,7 +49,7 @@ internal actual object DownloadsPlatformDownloader {
         scope.launch {
             val context = appContext
             if (context == null) {
-                onFailure("Download system is not initialized")
+                onFailure(runBlocking { getString(Res.string.downloads_error_not_initialized) })
                 return@launch
             }
 
@@ -69,7 +74,9 @@ internal actual object DownloadsPlatformDownloader {
                 var attemptedRangeRequest = resumeFromBytes > 0L
                 var httpRequest = buildRequest(if (attemptedRangeRequest) resumeFromBytes else null)
                 call = downloadHttpClient.newCall(httpRequest)
-                var response = call?.execute() ?: error("Download request failed")
+                var response = call?.execute() ?: error(
+                    runBlocking { getString(Res.string.downloads_error_request_failed) },
+                )
 
                 if (attemptedRangeRequest && response.code == 416) {
                     response.close()
@@ -78,12 +85,18 @@ internal actual object DownloadsPlatformDownloader {
                     attemptedRangeRequest = false
                     httpRequest = buildRequest(null)
                     call = downloadHttpClient.newCall(httpRequest)
-                    response = call?.execute() ?: error("Download request failed")
+                    response = call?.execute() ?: error(
+                        runBlocking { getString(Res.string.downloads_error_request_failed) },
+                    )
                 }
 
                 response.use { response ->
                     if (!response.isSuccessful) {
-                        error("Request failed with HTTP ${response.code}")
+                        error(
+                            runBlocking {
+                                getString(Res.string.downloads_error_http_failed, response.code)
+                            },
+                        )
                     }
 
                     val isPartialResume = attemptedRangeRequest && response.code == 206 && resumeFromBytes > 0L
@@ -94,7 +107,9 @@ internal actual object DownloadsPlatformDownloader {
                         tempFile.delete()
                     }
 
-                    val body = response.body ?: error("Empty response body")
+                    val body = response.body ?: error(
+                        runBlocking { getString(Res.string.downloads_error_empty_body) },
+                    )
                     val totalBytes = resolveTotalBytes(
                         startingBytes = startingBytes,
                         isPartialResume = isPartialResume,
@@ -131,7 +146,7 @@ internal actual object DownloadsPlatformDownloader {
                     onSuccess(destination.toURI().toString(), totalBytes ?: finalSize)
                 }
             } catch (error: Throwable) {
-                onFailure(error.message ?: "Download failed")
+                onFailure(error.message ?: runBlocking { getString(Res.string.download_failed) })
             }
         }
 
@@ -154,6 +169,60 @@ internal actual object DownloadsPlatformDownloader {
         val tempFile = File(downloadsDir, "$destinationFileName.part")
         if (!tempFile.exists()) return true
         return runCatching { tempFile.delete() }.getOrDefault(false)
+    }
+
+    actual fun resolveLocalFileUri(localFileUri: String?, destinationFileName: String): String? {
+        localFileUri
+            ?.toLocalFileOrNull()
+            ?.takeIf { it.exists() }
+            ?.let { return it.toURI().toString() }
+
+        val context = appContext ?: return null
+        val fileName = destinationFileName.trim().takeIf { it.isNotBlank() }
+            ?: localFileUri
+                ?.toLocalFileOrNull()
+                ?.name
+                ?.takeIf { it.isNotBlank() }
+            ?: return null
+        val downloadsDir = File(context.filesDir, "downloads")
+        val localFile = File(downloadsDir, fileName)
+        return localFile.takeIf { it.exists() }?.toURI()?.toString()
+    }
+
+    actual fun openDownloadsDirectory(): Boolean {
+        val context = appContext ?: return false
+        val downloadsDir = File(context.filesDir, "downloads").apply { mkdirs() }
+        val uri = runCatching {
+            FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                downloadsDir,
+            )
+        }.getOrNull() ?: return false
+
+        val intents = listOf(
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "resource/folder")
+            },
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "vnd.android.document/directory")
+            },
+            Intent(Intent.ACTION_VIEW).apply {
+                data = uri
+            },
+        )
+
+        return intents.any { intent ->
+            intent.addCategory(Intent.CATEGORY_DEFAULT)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            intent.addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+
+            runCatching {
+                context.startActivity(intent)
+                true
+            }.getOrDefault(false)
+        }
     }
 }
 

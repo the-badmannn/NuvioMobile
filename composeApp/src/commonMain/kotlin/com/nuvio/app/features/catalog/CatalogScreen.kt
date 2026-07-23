@@ -7,19 +7,22 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
+import com.nuvio.app.core.ui.NuvioLoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,45 +50,76 @@ import com.nuvio.app.core.ui.NuvioNetworkOfflineCard
 import coil3.compose.AsyncImage
 import com.nuvio.app.core.format.formatReleaseDateForDisplay
 import com.nuvio.app.core.ui.NuvioBackButton
+import com.nuvio.app.core.ui.NuvioCardDepthSurface
+import com.nuvio.app.core.ui.NuvioPosterWatchedOverlay
+import com.nuvio.app.core.ui.nuvioCardDepth
 import com.nuvio.app.core.ui.rememberPosterCardStyleUiState
 import com.nuvio.app.core.ui.posterCardClickable
-import com.nuvio.app.core.ui.nuvioPlatformExtraBottomPadding
+import com.nuvio.app.core.ui.nuvioSafeBottomPadding
+import com.nuvio.app.core.ui.withDuplicateSafeLazyKeys
 import com.nuvio.app.features.home.MetaPreview
+import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 import com.nuvio.app.features.home.PosterShape
 import com.nuvio.app.features.home.stableKey
+import com.nuvio.app.features.watched.WatchedRepository
+import com.nuvio.app.features.watching.application.WatchingState
+import com.nuvio.app.navigation.LocalUseNativeNavigation
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
+import nuvio.composeapp.generated.resources.*
+import org.jetbrains.compose.resources.stringResource
 
 @Composable
 fun CatalogScreen(
     title: String,
     subtitle: String,
-    manifestUrl: String,
-    type: String,
-    catalogId: String,
-    supportsPagination: Boolean,
-    genre: String? = null,
+    target: CatalogTarget,
     onBack: () -> Unit,
     onPosterClick: ((MetaPreview) -> Unit)? = null,
+    onPosterLongClick: ((MetaPreview) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val uiState by CatalogRepository.uiState.collectAsStateWithLifecycle()
+    val homeCatalogSettingsUiState by HomeCatalogSettingsRepository.uiState.collectAsStateWithLifecycle()
     val posterCardStyle = rememberPosterCardStyleUiState()
     val networkStatusUiState by NetworkStatusRepository.uiState.collectAsStateWithLifecycle()
-    val gridState = rememberLazyGridState()
+    val watchedUiState by remember {
+        WatchedRepository.ensureLoaded()
+        WatchedRepository.uiState
+    }.collectAsStateWithLifecycle()
+    val fullyWatchedSeriesKeys by WatchedRepository.fullyWatchedSeriesKeys.collectAsStateWithLifecycle()
+    val initialScrollPosition = remember(
+        target,
+        homeCatalogSettingsUiState.hideUnreleasedContent,
+    ) {
+        CatalogRepository.scrollPosition(
+            target = target,
+        )
+    }
+    val gridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = initialScrollPosition.firstVisibleItemIndex,
+        initialFirstVisibleItemScrollOffset = initialScrollPosition.firstVisibleItemScrollOffset,
+    )
     var headerHeightPx by remember { mutableIntStateOf(0) }
     var observedOfflineState by remember { mutableStateOf(false) }
 
-    LaunchedEffect(manifestUrl, type, catalogId, genre, supportsPagination) {
+    LaunchedEffect(target, homeCatalogSettingsUiState.hideUnreleasedContent) {
         CatalogRepository.load(
-            manifestUrl = manifestUrl,
-            type = type,
-            catalogId = catalogId,
-            genre = genre,
-            supportsPagination = supportsPagination,
-            force = false,
+            target = target,
         )
+    }
+
+    LaunchedEffect(gridState, target, homeCatalogSettingsUiState.hideUnreleasedContent) {
+        snapshotFlow { gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
+            .distinctUntilChanged()
+            .collect { (index, offset) ->
+                CatalogRepository.saveScrollPosition(
+                    target = target,
+                    firstVisibleItemIndex = index,
+                    firstVisibleItemScrollOffset = offset,
+                )
+            }
     }
 
     LaunchedEffect(gridState, uiState.canLoadMore, uiState.isLoading) {
@@ -101,7 +135,7 @@ fun CatalogScreen(
             }
     }
 
-    LaunchedEffect(networkStatusUiState.condition, manifestUrl, type, catalogId, genre, supportsPagination) {
+    LaunchedEffect(networkStatusUiState.condition, target) {
         when (networkStatusUiState.condition) {
             NetworkCondition.NoInternet,
             NetworkCondition.ServersUnreachable,
@@ -113,11 +147,7 @@ fun CatalogScreen(
                 if (!observedOfflineState) return@LaunchedEffect
                 observedOfflineState = false
                 CatalogRepository.load(
-                    manifestUrl = manifestUrl,
-                    type = type,
-                    catalogId = catalogId,
-                    genre = genre,
-                    supportsPagination = supportsPagination,
+                    target = target,
                     force = true,
                 )
             }
@@ -144,7 +174,7 @@ fun CatalogScreen(
                     start = 16.dp,
                     top = with(androidx.compose.ui.platform.LocalDensity.current) { headerHeightPx.toDp() } + 12.dp,
                     end = 16.dp,
-                    bottom = nuvioPlatformExtraBottomPadding + 28.dp,
+                    bottom = nuvioSafeBottomPadding(28.dp),
                 ),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
@@ -161,11 +191,7 @@ fun CatalogScreen(
                             onRetry = {
                                 NetworkStatusRepository.requestRefresh(force = true)
                                 CatalogRepository.load(
-                                    manifestUrl = manifestUrl,
-                                    type = type,
-                                    catalogId = catalogId,
-                                    genre = genre,
-                                    supportsPagination = supportsPagination,
+                                    target = target,
                                     force = true,
                                 )
                             },
@@ -173,14 +199,21 @@ fun CatalogScreen(
                     }
                 } else {
                     items(
-                        items = uiState.items,
-                        key = { item -> item.stableKey() },
-                    ) { item ->
+                        items = uiState.items.withDuplicateSafeLazyKeys { item -> item.stableKey() },
+                        key = { item -> item.lazyKey },
+                    ) { keyedItem ->
+                        val item = keyedItem.value
                         CatalogPosterTile(
                             item = item,
                             cornerRadiusDp = posterCardStyle.cornerRadiusDp,
                             hideLabels = posterCardStyle.hideLabelsEnabled,
+                            isWatched = WatchingState.isPosterWatched(
+                                watchedKeys = watchedUiState.watchedKeys,
+                                item = item,
+                                fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
+                            ),
                             onClick = onPosterClick?.let { { it(item) } },
+                            onLongClick = onPosterLongClick?.let { { it(item) } },
                         )
                     }
                     if (uiState.isLoading) {
@@ -208,6 +241,16 @@ private fun CatalogHeader(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    if (LocalUseNativeNavigation.current) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .height(44.dp),
+        )
+        return
+    }
+
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -250,7 +293,9 @@ private fun CatalogPosterTile(
     item: MetaPreview,
     cornerRadiusDp: Int,
     hideLabels: Boolean,
+    isWatched: Boolean,
     onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
 ) {
     Column(
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -261,7 +306,16 @@ private fun CatalogPosterTile(
                 .aspectRatio(item.posterShape.catalogAspectRatio())
                 .clip(RoundedCornerShape(cornerRadiusDp.dp))
                 .background(MaterialTheme.colorScheme.surface)
-                .posterCardClickable(onClick = onClick, onLongClick = null),
+                .nuvioCardDepth(
+                    shape = RoundedCornerShape(cornerRadiusDp.dp),
+                    surface = NuvioCardDepthSurface.Posters,
+                )
+                .posterCardClickable(
+                    onClick = onClick,
+                    onLongClick = onLongClick,
+                    zoomImageUrl = item.poster,
+                    zoomCornerRadius = cornerRadiusDp.dp,
+                ),
         ) {
             if (item.poster != null) {
                 AsyncImage(
@@ -271,6 +325,7 @@ private fun CatalogPosterTile(
                     contentScale = ContentScale.Crop,
                 )
             }
+            NuvioPosterWatchedOverlay(isWatched = isWatched)
         }
         if (!hideLabels) {
             Text(
@@ -329,12 +384,12 @@ private fun CatalogEmptyState(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(
-            text = "No titles found",
+            text = stringResource(Res.string.catalog_empty_title),
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onBackground,
         )
         Text(
-            text = errorMessage ?: "This catalog did not return any items.",
+            text = errorMessage ?: stringResource(Res.string.catalog_empty_message),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -349,10 +404,9 @@ private fun CatalogLoadingFooter() {
             .padding(vertical = 12.dp),
         contentAlignment = Alignment.Center,
     ) {
-        CircularProgressIndicator(
+        NuvioLoadingIndicator(
             modifier = Modifier.size(22.dp),
             color = MaterialTheme.colorScheme.primary,
-            strokeWidth = 2.dp,
         )
     }
 }

@@ -1,6 +1,7 @@
 package com.nuvio.app.features.catalog
 
 import com.nuvio.app.features.addons.AddonCatalog
+import com.nuvio.app.features.addons.buildAddonResourceUrl
 import com.nuvio.app.features.addons.httpGetText
 import com.nuvio.app.features.home.HomeCatalogParser
 import com.nuvio.app.features.home.MetaPreview
@@ -14,11 +15,17 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 const val CATALOG_PAGE_SIZE = 100
+private const val DUPLICATE_CATALOG_PAGE_ADVANCE_LIMIT = 3
 
 data class CatalogPage(
     val items: List<MetaPreview>,
     val rawItemCount: Int,
     val nextSkip: Int?,
+)
+
+data class CatalogPaginationState(
+    val nextSkip: Int?,
+    val consecutiveDuplicatePages: Int = 0,
 )
 
 private val inflightMutex = Mutex()
@@ -83,7 +90,40 @@ suspend fun fetchCatalogPage(
 }
 
 fun AddonCatalog.supportsPagination(): Boolean =
-    extra.any { property -> property.name == "skip" }
+    extra.any { property -> property.name.equals("skip", ignoreCase = true) }
+
+fun nextCatalogPaginationState(
+    supportsPagination: Boolean,
+    requestedSkip: Int,
+    page: CatalogPage,
+    loadedNewItems: Boolean,
+    consecutiveDuplicatePages: Int,
+): CatalogPaginationState {
+    if (!supportsPagination || page.rawItemCount <= 0 || page.nextSkip == null) {
+        return CatalogPaginationState(nextSkip = null)
+    }
+    if (loadedNewItems) {
+        return CatalogPaginationState(nextSkip = page.nextSkip)
+    }
+
+    val duplicatePages = consecutiveDuplicatePages + 1
+    val advancedSkip = if (page.nextSkip > requestedSkip) {
+        page.nextSkip
+    } else {
+        requestedSkip + page.rawItemCount.coerceAtLeast(1)
+    }
+    return if (duplicatePages < DUPLICATE_CATALOG_PAGE_ADVANCE_LIMIT && advancedSkip > requestedSkip) {
+        CatalogPaginationState(
+            nextSkip = advancedSkip,
+            consecutiveDuplicatePages = duplicatePages,
+        )
+    } else {
+        CatalogPaginationState(
+            nextSkip = null,
+            consecutiveDuplicatePages = duplicatePages,
+        )
+    }
+}
 
 fun mergeCatalogItems(
     existing: List<MetaPreview>,
@@ -102,6 +142,18 @@ fun mergeCatalogItems(
     }
 }
 
+fun dedupeCatalogItems(items: List<MetaPreview>): List<MetaPreview> {
+    if (items.size < 2) return items
+    val seen = mutableSetOf<String>()
+    return buildList(items.size) {
+        items.forEach { item ->
+            if (seen.add(item.stableKey())) {
+                add(item)
+            }
+        }
+    }
+}
+
 internal fun buildCatalogUrl(
     manifestUrl: String,
     type: String,
@@ -110,21 +162,19 @@ internal fun buildCatalogUrl(
     search: String?,
     skip: Int?,
 ): String {
-    val baseUrl = manifestUrl
-        .substringBefore("?")
-        .removeSuffix("/manifest.json")
-
     val extraParts = buildList {
         if (!search.isNullOrBlank()) add("search=${search.encodeCatalogExtra()}")
         if (!genre.isNullOrBlank()) add("genre=${genre.encodeCatalogExtra()}")
         if (skip != null && skip > 0) add("skip=$skip")
     }
 
-    return if (extraParts.isEmpty()) {
-        "$baseUrl/catalog/$type/$catalogId.json"
-    } else {
-        "$baseUrl/catalog/$type/$catalogId/${extraParts.joinToString(separator = "&")}.json"
-    }
+    return buildAddonResourceUrl(
+        manifestUrl = manifestUrl,
+        resource = "catalog",
+        type = type,
+        id = catalogId,
+        extraPathSegment = extraParts.joinToString(separator = "&").ifBlank { null },
+    )
 }
 
 private fun String.encodeCatalogExtra(): String =

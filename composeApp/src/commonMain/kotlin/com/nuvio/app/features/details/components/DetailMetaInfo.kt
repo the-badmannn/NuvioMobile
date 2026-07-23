@@ -34,10 +34,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.nuvio.app.core.build.AppFeaturePolicy
+import com.nuvio.app.core.ui.nuvioHorizontalScrollBleed
 import com.nuvio.app.features.details.MetaDetails
 import com.nuvio.app.features.details.MetaExternalRating
 import com.nuvio.app.features.details.formatRuntimeForDisplay
@@ -49,7 +53,7 @@ import com.nuvio.app.features.mdblist.MdbListMetadataService.PROVIDER_METACRITIC
 import com.nuvio.app.features.mdblist.MdbListMetadataService.PROVIDER_TMDB
 import com.nuvio.app.features.mdblist.MdbListMetadataService.PROVIDER_TOMATOES
 import com.nuvio.app.features.mdblist.MdbListMetadataService.PROVIDER_TRAKT
-import nuvio.composeapp.generated.resources.Res
+import nuvio.composeapp.generated.resources.*
 import nuvio.composeapp.generated.resources.rating_audience_score
 import nuvio.composeapp.generated.resources.rating_imdb
 import nuvio.composeapp.generated.resources.rating_letterboxd
@@ -58,7 +62,10 @@ import nuvio.composeapp.generated.resources.rating_rotten_tomatoes
 import nuvio.composeapp.generated.resources.rating_tmdb
 import nuvio.composeapp.generated.resources.rating_trakt
 import org.jetbrains.compose.resources.DrawableResource
+import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.painterResource
+import org.jetbrains.compose.resources.stringResource
+import kotlinx.coroutines.runBlocking
 import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 
@@ -66,6 +73,7 @@ import kotlin.math.roundToInt
 fun DetailMetaInfo(
     meta: MetaDetails,
     modifier: Modifier = Modifier,
+    horizontalScrollPadding: Dp = 0.dp,
 ) {
     Column(
         modifier = modifier
@@ -77,10 +85,12 @@ fun DetailMetaInfo(
         val runtimeText = formatRuntimeForDisplay(meta.runtime)
         val ageBadge = meta.ageRating?.trim()?.takeIf { it.isNotBlank() }
         val hasMdbImdbRating = meta.externalRatings.any { it.source == PROVIDER_IMDB }
+        val validImdbRating = meta.imdbRating
+            ?.takeIf { raw -> raw.toDoubleOrNull()?.let { it > 0.0 } == true }
         val hasMetaRow = releaseLine != null ||
             runtimeText != null ||
             ageBadge != null ||
-            (meta.imdbRating != null && !hasMdbImdbRating)
+            (validImdbRating != null && !hasMdbImdbRating)
         if (hasMetaRow) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -105,31 +115,23 @@ fun DetailMetaInfo(
                 ageBadge?.let { badge ->
                     DetailHeroMetaBadge(text = badge)
                 }
-                if (meta.imdbRating != null && !hasMdbImdbRating) {
+                if (validImdbRating != null && !hasMdbImdbRating) {
+                    val imdbTextStyle = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.sp,
+                    )
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Surface(
-                            shape = RoundedCornerShape(4.dp),
-                            color = ImdbYellow,
-                        ) {
-                            Text(
-                                text = "IMDb",
-                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Black,
-                                    letterSpacing = 0.sp,
-                                ),
-                                color = ImdbBlack,
-                            )
-                        }
+                        ImdbRatingSourceLabel(
+                            storeTextStyle = imdbTextStyle,
+                            storeTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         Spacer(modifier = Modifier.width(5.dp))
                         Text(
-                            text = meta.imdbRating,
-                            style = MaterialTheme.typography.titleMedium,
+                            text = validImdbRating,
+                            style = imdbTextStyle,
                             color = ImdbYellow,
-                            fontWeight = FontWeight.Bold,
                         )
                     }
                 }
@@ -143,19 +145,20 @@ fun DetailMetaInfo(
         ) {
             DetailRatingsRow(
                 ratings = meta.externalRatings,
+                horizontalScrollPadding = horizontalScrollPadding,
             )
         }
 
         if (meta.director.isNotEmpty()) {
             MetaLabelValueRow(
-                label = "Director",
+                label = stringResource(Res.string.details_director),
                 value = meta.director.joinToString(", "),
             )
         }
 
         if (meta.writer.isNotEmpty()) {
             MetaLabelValueRow(
-                label = "Writer",
+                label = stringResource(Res.string.details_writer),
                 value = meta.writer.joinToString(", "),
             )
         }
@@ -182,7 +185,11 @@ fun DetailMetaInfo(
                 if (canExpand) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = if (expanded) "Show Less" else "Show More ▾",
+                        text = if (expanded) {
+                            stringResource(Res.string.details_show_less)
+                        } else {
+                            stringResource(Res.string.details_show_more)
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.clickable { expanded = !expanded },
@@ -196,6 +203,7 @@ fun DetailMetaInfo(
 @Composable
 private fun DetailRatingsRow(
     ratings: List<MetaExternalRating>,
+    horizontalScrollPadding: Dp,
 ) {
     val orderedRatings = remember(ratings) {
         val bySource = ratings.associateBy { it.source }
@@ -208,29 +216,72 @@ private fun DetailRatingsRow(
 
     Row(
         modifier = Modifier
+            .nuvioHorizontalScrollBleed(horizontalScrollPadding)
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = horizontalScrollPadding),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         orderedRatings.forEach { (visuals, rating) ->
+            val ratingTextStyle = MaterialTheme.typography.titleSmall.copy(
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.sp,
+            )
             Row(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Image(
-                    painter = painterResource(visuals.logo),
-                    contentDescription = visuals.displayName,
-                    modifier = Modifier.size(width = visuals.logoWidth, height = 16.dp),
-                )
+                if (visuals.source == PROVIDER_IMDB && !AppFeaturePolicy.imdbRatingLogoEnabled) {
+                    ImdbRatingSourceLabel(
+                        storeTextStyle = ratingTextStyle,
+                        storeTextColor = visuals.valueColor,
+                    )
+                } else {
+                    Image(
+                        painter = painterResource(visuals.logo),
+                        contentDescription = visuals.displayName,
+                        modifier = Modifier.size(width = visuals.logoWidth, height = 16.dp),
+                    )
+                }
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
                     text = visuals.format(rating.value),
-                    style = MaterialTheme.typography.titleSmall,
+                    style = ratingTextStyle,
                     color = visuals.valueColor,
-                    fontWeight = FontWeight.Bold,
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ImdbRatingSourceLabel(
+    storeTextStyle: TextStyle,
+    storeTextColor: Color,
+) {
+    if (AppFeaturePolicy.imdbRatingLogoEnabled) {
+        Surface(
+            shape = RoundedCornerShape(4.dp),
+            color = ImdbYellow,
+        ) {
+            Text(
+                text = stringResource(Res.string.source_imdb),
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                style = MaterialTheme.typography.labelMedium.copy(
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 0.sp,
+                ),
+                color = ImdbBlack,
+            )
+        }
+    } else {
+        Text(
+            text = stringResource(Res.string.source_imdb),
+            style = storeTextStyle,
+            color = storeTextColor,
+            maxLines = 1,
+        )
     }
 }
 
@@ -341,7 +392,7 @@ private val ratingVisuals = listOf(
     ),
     RatingVisuals(
         source = PROVIDER_AUDIENCE,
-        displayName = "Audience Score",
+        displayName = runBlocking { getString(Res.string.rating_audience_score) },
         logo = Res.drawable.rating_audience_score,
         logoWidth = 16.dp,
         valueColor = Color(0xFFFA320A),

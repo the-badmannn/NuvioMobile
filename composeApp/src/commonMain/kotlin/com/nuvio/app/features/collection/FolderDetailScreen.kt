@@ -23,7 +23,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.LocalRippleConfiguration
-import androidx.compose.material3.CircularProgressIndicator
+import com.nuvio.app.core.ui.NuvioLoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
@@ -53,16 +53,25 @@ import coil3.compose.AsyncImage
 import com.nuvio.app.core.ui.NuvioPosterCard
 import com.nuvio.app.core.ui.NuvioPosterShape
 import com.nuvio.app.core.ui.NuvioScreenHeader
-import com.nuvio.app.core.ui.nuvioPlatformExtraBottomPadding
+import com.nuvio.app.core.ui.nuvioSafeBottomPadding
+import com.nuvio.app.core.ui.withDuplicateSafeLazyKeys
 import com.nuvio.app.features.home.HomeCatalogSection
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.home.PosterShape
 import com.nuvio.app.features.home.canOpenCatalog
 import com.nuvio.app.features.home.stableKey
 import com.nuvio.app.features.home.components.HomeCatalogRowSection
+import com.nuvio.app.features.watched.WatchedRepository
+import com.nuvio.app.features.watching.application.WatchingState
+import com.nuvio.app.navigation.LocalUseNativeNavigation
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
+import nuvio.composeapp.generated.resources.Res
+import nuvio.composeapp.generated.resources.collections_folder_empty_items
+import nuvio.composeapp.generated.resources.collections_folder_not_found
+import nuvio.composeapp.generated.resources.collections_tab_all
+import org.jetbrains.compose.resources.stringResource
 
 private val FolderCoverHeight = 176.dp
 
@@ -73,7 +82,12 @@ fun FolderDetailScreen(
     onPosterClick: (MetaPreview) -> Unit,
 ) {
     val uiState by FolderDetailRepository.uiState.collectAsState()
+    val watchedUiState by remember {
+        WatchedRepository.ensureLoaded()
+        WatchedRepository.uiState
+    }.collectAsState()
     val folder = uiState.folder
+    val useNativeNavigation = LocalUseNativeNavigation.current
     val coverImageUrl = folder?.coverImageUrl?.takeIf { it.isNotBlank() }
     val density = LocalDensity.current
     val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -129,13 +143,15 @@ fun FolderDetailScreen(
             )
         }
 
-        NuvioScreenHeader(
-            title = folder?.title ?: uiState.collectionTitle,
-            modifier = Modifier.padding(horizontal = 16.dp),
-            includeStatusBarPadding = coverImageUrl == null,
-            topPadding = if (coverImageUrl != null) statusBarTop * heroCollapseFraction else null,
-            onBack = onBack,
-        )
+        if (!useNativeNavigation) {
+            NuvioScreenHeader(
+                title = folder?.title ?: uiState.collectionTitle,
+                modifier = Modifier.padding(horizontal = 16.dp),
+                includeStatusBarPadding = coverImageUrl == null,
+                topPadding = if (coverImageUrl != null) statusBarTop * heroCollapseFraction else null,
+                onBack = onBack,
+            )
+        }
 
         if (folder == null && !uiState.isLoading) {
             Box(
@@ -143,7 +159,7 @@ fun FolderDetailScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "Folder not found",
+                    text = stringResource(Res.string.collections_folder_not_found),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -154,18 +170,21 @@ fun FolderDetailScreen(
         when (uiState.viewMode) {
             FolderViewMode.TABBED_GRID -> TabbedGridContent(
                 uiState = uiState,
+                watchedKeys = watchedUiState.watchedKeys,
                 modifier = Modifier.weight(1f).then(contentModifier),
                 onTabSelected = { FolderDetailRepository.selectTab(it) },
                 onPosterClick = onPosterClick,
             )
             FolderViewMode.ROWS -> RowsContent(
                 uiState = uiState,
+                watchedKeys = watchedUiState.watchedKeys,
                 modifier = Modifier.weight(1f).then(contentModifier),
                 onCatalogClick = onCatalogClick,
                 onPosterClick = onPosterClick,
             )
             FolderViewMode.FOLLOW_LAYOUT -> RowsContent(
                 uiState = uiState,
+                watchedKeys = watchedUiState.watchedKeys,
                 modifier = Modifier.weight(1f).then(contentModifier),
                 onCatalogClick = onCatalogClick,
                 onPosterClick = onPosterClick,
@@ -193,6 +212,7 @@ private fun FolderCoverImage(
 @Composable
 private fun TabbedGridContent(
     uiState: FolderDetailUiState,
+    watchedKeys: Set<String>,
     modifier: Modifier = Modifier,
     onTabSelected: (Int) -> Unit,
     onPosterClick: (MetaPreview) -> Unit,
@@ -229,7 +249,11 @@ private fun TabbedGridContent(
                             onClick = { onTabSelected(index) },
                             text = {
                                 Text(
-                                    text = tab.label,
+                                    text = if (tab.isAllTab) {
+                                        stringResource(Res.string.collections_tab_all)
+                                    } else {
+                                        tab.label
+                                    },
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
@@ -260,20 +284,25 @@ private fun TabbedGridContent(
                         contentPadding = PaddingValues(
                             start = 16.dp,
                             end = 16.dp,
-                            bottom = 18.dp + nuvioPlatformExtraBottomPadding,
+                            bottom = nuvioSafeBottomPadding(18.dp),
                         ),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         items(
-                            items = selectedTab.items,
-                            key = { item -> item.stableKey() },
-                        ) { item ->
+                            items = selectedTab.items.withDuplicateSafeLazyKeys { item -> item.stableKey() },
+                            key = { item -> item.lazyKey },
+                        ) { keyedItem ->
+                            val item = keyedItem.value
                             NuvioPosterCard(
                                 title = item.name,
                                 imageUrl = item.poster,
                                 shape = NuvioPosterShape.Poster,
                                 detailLine = item.releaseInfo,
+                                isWatched = WatchingState.isPosterWatched(
+                                    watchedKeys = watchedKeys,
+                                    item = item,
+                                ),
                                 onClick = { onPosterClick(item) },
                             )
                         }
@@ -293,6 +322,7 @@ private fun TabbedGridContent(
 @Composable
 private fun RowsContent(
     uiState: FolderDetailUiState,
+    watchedKeys: Set<String>,
     modifier: Modifier = Modifier,
     onCatalogClick: (HomeCatalogSection) -> Unit,
     onPosterClick: (MetaPreview) -> Unit,
@@ -312,14 +342,15 @@ private fun RowsContent(
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(
-            bottom = 18.dp + nuvioPlatformExtraBottomPadding,
+            bottom = nuvioSafeBottomPadding(18.dp),
         ),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         items(
-            items = sections,
-            key = { it.key },
-        ) { section ->
+            items = sections.withDuplicateSafeLazyKeys { it.key },
+            key = { it.lazyKey },
+        ) { keyedSection ->
+            val section = keyedSection.value
             HomeCatalogRowSection(
                 section = section,
                 entries = section.items.take(18),
@@ -328,6 +359,7 @@ private fun RowsContent(
                 } else {
                     null
                 },
+                watchedKeys = watchedKeys,
                 onPosterClick = { onPosterClick(it) },
             )
         }
@@ -342,10 +374,9 @@ private fun PaginationLoadingFooter() {
             .padding(vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
-        CircularProgressIndicator(
+        NuvioLoadingIndicator(
             modifier = Modifier.size(28.dp),
             color = MaterialTheme.colorScheme.primary,
-            strokeWidth = 3.dp,
         )
     }
 }
@@ -365,10 +396,9 @@ private fun LoadingIndicator() {
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
     ) {
-        CircularProgressIndicator(
+        NuvioLoadingIndicator(
             modifier = Modifier.size(32.dp),
             color = MaterialTheme.colorScheme.primary,
-            strokeWidth = 3.dp,
         )
     }
 }
@@ -395,7 +425,7 @@ private fun EmptyMessage() {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "No items found",
+            text = stringResource(Res.string.collections_folder_empty_items),
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

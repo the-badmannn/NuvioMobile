@@ -21,12 +21,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlin.concurrent.Volatile
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import nuvio.composeapp.generated.resources.*
+import org.jetbrains.compose.resources.getString
 import kotlinx.serialization.json.Json
 
 object EpisodeReleaseNotificationsRepository {
@@ -44,8 +48,10 @@ object EpisodeReleaseNotificationsRepository {
     private val _uiState = MutableStateFlow(EpisodeReleaseNotificationsUiState())
     val uiState: StateFlow<EpisodeReleaseNotificationsUiState> = _uiState.asStateFlow()
 
+    @Volatile
     private var hasLoaded = false
-    private var trackedShowsByKey: MutableMap<String, TrackedFollowedShow> = mutableMapOf()
+    @Volatile
+    private var trackedShowsByKey: Map<String, TrackedFollowedShow> = emptyMap()
 
     init {
         scope.launch {
@@ -81,7 +87,7 @@ object EpisodeReleaseNotificationsRepository {
 
     fun clearLocalState() {
         hasLoaded = false
-        trackedShowsByKey.clear()
+        trackedShowsByKey = emptyMap()
         _uiState.value = EpisodeReleaseNotificationsUiState()
         scope.launch {
             runCatching { EpisodeReleaseNotificationPlatform.clearScheduledEpisodeReleaseNotifications() }
@@ -146,7 +152,7 @@ object EpisodeReleaseNotificationsRepository {
                     permissionGranted = false,
                     scheduledCount = 0,
                     statusMessage = null,
-                    errorMessage = "Notifications permission is disabled for Nuvio.",
+                    errorMessage = getString(Res.string.settings_notifications_permission_disabled),
                 )
                 persist()
                 return@launch
@@ -172,7 +178,7 @@ object EpisodeReleaseNotificationsRepository {
                 _uiState.value = _uiState.value.copy(
                     isSendingTest = false,
                     statusMessage = null,
-                    errorMessage = "Save a show to your library first to test a deeplink notification.",
+                    errorMessage = getString(Res.string.settings_notifications_test_requires_saved_show),
                 )
                 return@launch
             }
@@ -194,7 +200,7 @@ object EpisodeReleaseNotificationsRepository {
                     isSendingTest = false,
                     permissionGranted = false,
                     statusMessage = null,
-                    errorMessage = "Notifications permission is disabled for Nuvio.",
+                    errorMessage = getString(Res.string.settings_notifications_permission_disabled),
                 )
                 return@launch
             }
@@ -202,7 +208,7 @@ object EpisodeReleaseNotificationsRepository {
             val request = EpisodeReleaseNotificationRequest(
                 requestId = "episode-release-test-${ProfileRepository.activeProfileId}-${TraktPlatformClock.nowEpochMs()}",
                 notificationTitle = target.name,
-                notificationBody = "Preview episode release alert.",
+                notificationBody = getString(Res.string.notifications_test_preview_body),
                 releaseDateIso = CurrentDateProvider.todayIsoDate(),
                 deepLinkUrl = buildMetaDeepLinkUrl(type = target.type, id = target.id),
                 backdropUrl = target.banner ?: target.poster,
@@ -216,7 +222,7 @@ object EpisodeReleaseNotificationsRepository {
                 _uiState.value = _uiState.value.copy(
                     isSendingTest = false,
                     permissionGranted = true,
-                    statusMessage = "Test notification sent for ${target.name}.",
+                    statusMessage = getString(Res.string.notifications_test_sent_for, target.name),
                     errorMessage = null,
                 )
             }.onFailure {
@@ -224,7 +230,7 @@ object EpisodeReleaseNotificationsRepository {
                     isSendingTest = false,
                     permissionGranted = true,
                     statusMessage = null,
-                    errorMessage = "Failed to send a test notification.",
+                    errorMessage = getString(Res.string.notifications_test_send_failed),
                 )
             }
         }
@@ -239,7 +245,6 @@ object EpisodeReleaseNotificationsRepository {
 
     private fun loadFromDisk() {
         hasLoaded = true
-        trackedShowsByKey.clear()
 
         val payload = EpisodeReleaseNotificationsStorage.loadPayload().orEmpty().trim()
         val stored = payload.takeIf { it.isNotEmpty() }
@@ -251,11 +256,11 @@ object EpisodeReleaseNotificationsRepository {
                 }.getOrNull()
             }
 
-        stored?.followedShows
-            .orEmpty()
-            .forEach { trackedShow ->
-                trackedShowsByKey[buildTrackedShowKey(trackedShow.contentType, trackedShow.contentId)] = trackedShow
+        trackedShowsByKey = buildMap {
+            stored?.followedShows.orEmpty().forEach { trackedShow ->
+                put(buildTrackedShowKey(trackedShow.contentType, trackedShow.contentId), trackedShow)
             }
+        }
 
         _uiState.value = EpisodeReleaseNotificationsUiState(
             isEnabled = stored?.enabled ?: false,
@@ -290,7 +295,7 @@ object EpisodeReleaseNotificationsRepository {
             permissionGranted = granted,
             testTargetTitle = currentTestTarget()?.name,
             errorMessage = when {
-                _uiState.value.isEnabled && !granted -> "System notifications are currently disabled for Nuvio."
+                _uiState.value.isEnabled && !granted -> runBlocking { getString(Res.string.settings_notifications_permission_disabled) }
                 else -> _uiState.value.errorMessage
             },
         )
@@ -318,7 +323,7 @@ object EpisodeReleaseNotificationsRepository {
 
         val changed = nextTrackedShows != trackedShowsByKey
         if (changed) {
-            trackedShowsByKey = nextTrackedShows.toMutableMap()
+            trackedShowsByKey = nextTrackedShows.toMap()
         }
         updateTestTargetState()
         return changed
@@ -358,7 +363,7 @@ object EpisodeReleaseNotificationsRepository {
                     scheduledCount = 0,
                     testTargetTitle = currentTestTarget()?.name,
                     errorMessage = if (_uiState.value.isEnabled && !permissionGranted) {
-                        "System notifications are currently disabled for Nuvio."
+                        runBlocking { getString(Res.string.settings_notifications_permission_disabled) }
                     } else {
                         null
                     },

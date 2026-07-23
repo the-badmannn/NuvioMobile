@@ -3,6 +3,8 @@ package com.nuvio.app.features.addons
 internal expect object AddonStorage {
     fun loadInstalledAddonUrls(profileId: Int): List<String>
     fun saveInstalledAddonUrls(profileId: Int, urls: List<String>)
+    fun loadAddonEnabledStates(profileId: Int): Map<String, Boolean>
+    fun saveAddonEnabledStates(profileId: Int, states: Map<String, Boolean>)
 }
 
 data class RawHttpResponse(
@@ -12,6 +14,9 @@ data class RawHttpResponse(
     val body: String,
     val headers: Map<String, String>,
 )
+
+/** Default safety limit for generic and plugin-provided HTTP responses. */
+internal const val DefaultRawHttpResponseMaxBytes = 1024 * 1024
 
 expect suspend fun httpGetText(url: String): String
 
@@ -33,4 +38,6 @@ expect suspend fun httpRequestRaw(
     url: String,
     headers: Map<String, String>,
     body: String,
+    followRedirects: Boolean = true,
+    maxResponseBodyBytes: Int = DefaultRawHttpResponseMaxBytes,
 ): RawHttpResponse

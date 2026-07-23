@@ -20,9 +20,13 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.Operation
 import androidx.work.WorkManager
+import com.nuvio.app.core.storage.ProfileScopedKey
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
-import io.ktor.client.engine.android.Android
+import io.ktor.client.engine.okhttp.OkHttp
+import kotlinx.coroutines.runBlocking
+import nuvio.composeapp.generated.resources.*
+import org.jetbrains.compose.resources.getString
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.get
 import java.time.LocalDate
@@ -49,7 +53,7 @@ internal actual object EpisodeReleaseNotificationPlatform {
     private var currentActivity: ComponentActivity? = null
     private var pendingPermissionContinuation: kotlin.coroutines.Continuation<Boolean>? = null
     private val httpClient by lazy {
-        HttpClient(Android) {
+        HttpClient(OkHttp) {
             install(HttpTimeout) {
                 requestTimeoutMillis = 15_000
                 connectTimeoutMillis = 15_000
@@ -168,7 +172,7 @@ internal actual object EpisodeReleaseNotificationPlatform {
 
             preferences(context)
                 .edit()
-                .putStringSet(scheduledIdsKey, scheduledIds.toSet())
+                .putStringSet(scopedScheduledIdsKey(), scheduledIds.toSet())
                 .apply()
         }
     }
@@ -180,7 +184,7 @@ internal actual object EpisodeReleaseNotificationPlatform {
             cancelTrackedWork(workManager)
             preferences(context)
                 .edit()
-                .remove(scheduledIdsKey)
+                .remove(scopedScheduledIdsKey())
                 .apply()
         }
     }
@@ -252,7 +256,7 @@ internal actual object EpisodeReleaseNotificationPlatform {
     private fun cancelTrackedWork(workManager: WorkManager) {
         val context = appContext ?: return
         preferences(context)
-            .getStringSet(scheduledIdsKey, emptySet())
+            .getStringSet(scopedScheduledIdsKey(), emptySet())
             .orEmpty()
             .forEach { requestId ->
                 awaitOperation(workManager.cancelUniqueWork(uniqueWorkName(requestId)))
@@ -265,6 +269,8 @@ internal actual object EpisodeReleaseNotificationPlatform {
 
     private fun preferences(context: Context) =
         context.getSharedPreferences(platformPreferencesName, Context.MODE_PRIVATE)
+
+    private fun scopedScheduledIdsKey(): String = ProfileScopedKey.of(scheduledIdsKey)
 
     private fun triggerAtEpochMs(releaseDateIso: String): Long? = runCatching {
         LocalDate.parse(releaseDateIso)
@@ -285,10 +291,10 @@ internal actual object EpisodeReleaseNotificationPlatform {
 
         val channel = NotificationChannel(
             channelId,
-            "Episode Releases",
+            runBlocking { getString(Res.string.notifications_channel_episode_releases_name) },
             NotificationManager.IMPORTANCE_DEFAULT,
         ).apply {
-            description = "Alerts when a saved show's new episode is released."
+            description = runBlocking { getString(Res.string.notifications_channel_episode_releases_description) }
         }
         notificationManager.createNotificationChannel(channel)
     }

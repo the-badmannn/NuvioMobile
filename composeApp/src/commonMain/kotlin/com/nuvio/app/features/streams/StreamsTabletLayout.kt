@@ -42,9 +42,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.nuvio.app.isIos
+import dev.chrisbanes.haze.HazeInputScale
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
+import nuvio.composeapp.generated.resources.*
+import org.jetbrains.compose.resources.stringResource
 
 @Composable
 internal fun TabletStreamsLayout(
@@ -58,20 +61,18 @@ internal fun TabletStreamsLayout(
     episodeNumber: Int?,
     episodeTitle: String?,
     uiState: StreamsUiState,
+    debridEnabled: Boolean,
+    appendInstantServiceToDefaultName: Boolean,
     resumePositionMs: Long?,
     resumeProgressFraction: Float?,
     onStreamSelected: (stream: StreamItem, resumePositionMs: Long?, resumeProgressFraction: Float?) -> Unit,
     onStreamLongPress: (StreamItem) -> Unit,
+    onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val hazeState = rememberHazeState()
-    val tabletBackdrop = remember(isEpisode, episodeThumbnail, background, poster) {
-        resolveTabletBackdrop(
-            isEpisode = isEpisode,
-            episodeThumbnail = episodeThumbnail,
-            background = background,
-            poster = poster,
-        )
+    val tabletBackdrop = remember(background, poster) {
+        background ?: poster
     }
     var backdropVisible by remember(tabletBackdrop) { mutableStateOf(false) }
 
@@ -173,8 +174,11 @@ internal fun TabletStreamsLayout(
                     modifier = Modifier
                         .fillMaxSize()
                         .clip(RoundedCornerShape(24.dp))
-                        .hazeEffect(state = hazeState)
-                        .background(Color.Black.copy(alpha = 0.22f)),
+                        .hazeEffect(state = hazeState) {
+                            inputScale = HazeInputScale.Fixed(0.66f)
+                            blurRadius = 56.dp
+                        }
+                        .background(Color.Black.copy(alpha = 0.36f)),
                 ) {
                     Column(
                         modifier = Modifier
@@ -193,6 +197,7 @@ internal fun TabletStreamsLayout(
                             groups = uiState.groups,
                             selectedFilter = uiState.selectedFilter,
                             onFilterSelected = { addonId -> StreamsRepository.selectFilter(addonId) },
+                            onRefresh = onRefresh,
                         )
 
                         ActiveScrapersStatusBlock(
@@ -202,6 +207,8 @@ internal fun TabletStreamsLayout(
 
                         StreamList(
                             uiState = uiState,
+                            debridEnabled = debridEnabled,
+                            appendInstantServiceToDefaultName = appendInstantServiceToDefaultName,
                             onStreamSelected = onStreamSelected,
                             onStreamLongPress = onStreamLongPress,
                             resumePositionMs = resumePositionMs,
@@ -221,19 +228,23 @@ private fun TabletMovieInfoPanel(
     logo: String?,
     modifier: Modifier = Modifier,
 ) {
+    var logoLoadError by remember(logo) { mutableStateOf(false) }
+    val logoUrl = logo?.takeIf { it.isNotBlank() }
+
     Column(
         modifier = modifier.fillMaxWidth(0.8f),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        if (!logo.isNullOrBlank()) {
+        if (logoUrl != null && !logoLoadError) {
             AsyncImage(
-                model = logo,
-                contentDescription = null,
+                model = logoUrl,
+                contentDescription = title,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(120.dp),
                 contentScale = ContentScale.Fit,
+                onError = { logoLoadError = true },
             )
         } else if (title.isNotBlank()) {
             Text(
@@ -255,7 +266,7 @@ private fun TabletMovieInfoPanel(
             )
         } else {
             Text(
-                text = "No metadata available",
+                text = stringResource(Res.string.streams_no_metadata),
                 style = MaterialTheme.typography.bodyLarge.copy(
                     fontSize = 16.sp,
                     fontStyle = FontStyle.Italic,
@@ -276,6 +287,8 @@ private fun TabletEpisodeInfoPanel(
     showTitle: String,
     modifier: Modifier = Modifier,
 ) {
+    var logoLoadError by remember(logo) { mutableStateOf(false) }
+    val logoUrl = logo?.takeIf { it.isNotBlank() }
     val textShadow = Shadow(
         color = Color.Black,
         offset = Offset(0f, 0f),
@@ -287,14 +300,15 @@ private fun TabletEpisodeInfoPanel(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        if (!logo.isNullOrBlank()) {
+        if (logoUrl != null && !logoLoadError) {
             AsyncImage(
-                model = logo,
-                contentDescription = null,
+                model = logoUrl,
+                contentDescription = showTitle,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(120.dp),
                 contentScale = ContentScale.Fit,
+                onError = { logoLoadError = true },
             )
         } else {
             Text(
@@ -314,7 +328,12 @@ private fun TabletEpisodeInfoPanel(
 
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = "S${seasonNumber}E${episodeNumber} - ${episodeTitle?.takeIf { it.isNotBlank() } ?: "Episode"}",
+            text = stringResource(
+                Res.string.streams_episode_title_with_name,
+                seasonNumber,
+                episodeNumber,
+                episodeTitle?.takeIf { it.isNotBlank() } ?: stringResource(Res.string.streams_episode_fallback_title),
+            ),
             style = MaterialTheme.typography.bodyLarge.copy(
                 fontSize = 16.sp,
                 lineHeight = 24.sp,
@@ -345,7 +364,7 @@ private fun ActiveScrapersStatusBlock(
             .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
         Text(
-            text = "Active scrapers",
+            text = stringResource(Res.string.streams_active_scrapers),
             style = MaterialTheme.typography.labelSmall.copy(
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Medium,
@@ -379,18 +398,4 @@ private fun ActiveScrapersStatusBlock(
             }
         }
     }
-}
-
-private fun resolveTabletBackdrop(
-    isEpisode: Boolean,
-    episodeThumbnail: String?,
-    background: String?,
-    poster: String?,
-): String? {
-    if (!isEpisode) return background ?: poster
-
-    val preferredEpisodeThumbnail = episodeThumbnail?.takeIf {
-        it.isNotBlank() && it != poster
-    }
-    return preferredEpisodeThumbnail ?: background ?: poster
 }

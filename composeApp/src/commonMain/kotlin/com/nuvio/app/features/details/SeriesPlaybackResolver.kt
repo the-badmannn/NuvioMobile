@@ -1,6 +1,7 @@
 package com.nuvio.app.features.details
 
 import com.nuvio.app.features.watched.WatchedItem
+import com.nuvio.app.features.watched.normalizeWatchedMarkedAtEpochMs
 import com.nuvio.app.features.watchprogress.WatchProgressEntry
 import com.nuvio.app.features.watching.domain.WatchingCompletedEpisode
 import com.nuvio.app.features.watching.domain.WatchingContentRef
@@ -14,6 +15,7 @@ import com.nuvio.app.features.watching.domain.isReleasedBy
 import com.nuvio.app.features.watching.domain.latestCompletedSeriesEpisode
 import com.nuvio.app.features.watching.domain.playLabel
 import com.nuvio.app.features.watching.domain.resumeLabel
+import com.nuvio.app.features.watching.domain.shouldSurfaceNextEpisode
 import com.nuvio.app.features.watching.domain.upNextLabel
 
 internal fun MetaDetails.sortedPlayableEpisodes(): List<MetaVideo> =
@@ -21,12 +23,32 @@ internal fun MetaDetails.sortedPlayableEpisodes(): List<MetaVideo> =
         .filter { it.season != null || it.episode != null }
         .sortedWith(metaVideoSeasonEpisodeComparator)
 
+internal fun List<MetaVideo>.filterUnavailableFutureSeasons(
+    todayIsoDate: String,
+): List<MetaVideo> {
+    val unavailableSeasons = groupBy { episode -> normalizeSeasonNumber(episode.season) }
+        .filter { (seasonNumber, episodes) ->
+            if (seasonNumber <= 0) return@filter false
+            val firstEpisode = episodes.minWithOrNull(
+                compareBy<MetaVideo>({ it.episode ?: Int.MAX_VALUE }, { it.released.orEmpty() }),
+            ) ?: return@filter false
+            !firstEpisode.isReleasedBy(todayIsoDate)
+        }
+        .keys
+
+    return if (unavailableSeasons.isEmpty()) {
+        this
+    } else {
+        filter { episode -> normalizeSeasonNumber(episode.season) !in unavailableSeasons }
+    }
+}
+
 internal fun MetaDetails.firstPlayableEpisode(): MetaVideo? =
     sortedPlayableEpisodes().firstOrNull()
 
 internal fun MetaDetails.firstReleasedPlayableEpisode(todayIsoDate: String): MetaVideo? =
     sortedPlayableEpisodes().firstOrNull { video ->
-        isReleasedBy(todayIsoDate = todayIsoDate, releasedDate = video.released)
+        video.isReleasedBy(todayIsoDate)
     }
 
 internal fun MetaDetails.nextReleasedEpisodeAfter(
@@ -44,24 +66,64 @@ internal fun MetaDetails.nextReleasedEpisodeAfter(
     episodeNumber: Int?,
     todayIsoDate: String,
 ): MetaVideo? {
+    return nextReleasedEpisodeAfter(
+        seasonNumber = seasonNumber,
+        episodeNumber = episodeNumber,
+        todayIsoDate = todayIsoDate,
+        showUnairedNextUp = false,
+    )
+}
+
+internal fun MetaDetails.nextReleasedEpisodeAfter(
+    seasonNumber: Int?,
+    episodeNumber: Int?,
+    todayIsoDate: String,
+    showUnairedNextUp: Boolean,
+): MetaVideo? {
     val sortedEpisodes = sortedPlayableEpisodes()
     val watchedVideoId = buildPlaybackVideoId(
         content = WatchingContentRef(type = type, id = id),
         seasonNumber = seasonNumber,
         episodeNumber = episodeNumber,
     )
-    val candidates = sortedEpisodes
-        .dropWhile { episode ->
-            buildPlaybackVideoId(
-                content = WatchingContentRef(type = type, id = id),
-                seasonNumber = episode.season,
-                episodeNumber = episode.episode,
-                fallbackVideoId = episode.id,
-            ) != watchedVideoId
+    var watchedIndex = sortedEpisodes.indexOfFirst { episode ->
+        buildPlaybackVideoId(
+            content = WatchingContentRef(type = type, id = id),
+            seasonNumber = episode.season,
+            episodeNumber = episode.episode,
+            fallbackVideoId = episode.id,
+        ) == watchedVideoId
+    }
+
+    // Fallback: if the seed wasn't found by season+episode (anime with absolute
+    // numbering on Trakt vs multi-season on addon), try global index matching.
+    if (watchedIndex < 0 && seasonNumber != null && episodeNumber != null) {
+        val mainEpisodes = sortedEpisodes.filter { episode -> normalizeSeasonNumber(episode.season) > 0 }
+        val addonSeasons = mainEpisodes.mapTo(mutableSetOf()) { episode ->
+            normalizeSeasonNumber(episode.season)
         }
-        .drop(1)
+        if (seasonNumber == 1 && addonSeasons.size > 1 && episodeNumber > 0) {
+            val globalIndex = episodeNumber - 1
+            if (globalIndex in mainEpisodes.indices) {
+                watchedIndex = sortedEpisodes.indexOf(mainEpisodes[globalIndex])
+            }
+        }
+    }
+
+    if (watchedIndex < 0) return null
+
+    val watchedEpisodeSeason = sortedEpisodes[watchedIndex].season
+    val candidates = sortedEpisodes
+        .drop(watchedIndex + 1)
         .filter { episode ->
-            isReleasedBy(todayIsoDate = todayIsoDate, releasedDate = episode.released)
+            shouldSurfaceNextEpisode(
+                watchedSeasonNumber = watchedEpisodeSeason,
+                candidateSeasonNumber = episode.season,
+                todayIsoDate = todayIsoDate,
+                releasedDate = episode.released,
+                showUnairedNextUp = showUnairedNextUp,
+                available = episode.available,
+            )
         }
     return candidates.firstOrNull { normalizeSeasonNumber(it.season) > 0 }
 }
@@ -81,14 +143,34 @@ internal fun MetaDetails.seriesPrimaryAction(
     watchedItems: List<WatchedItem>,
     todayIsoDate: String,
     preferFurthestEpisode: Boolean = true,
+    showUnairedNextUp: Boolean = false,
+): SeriesPrimaryAction? =
+    seriesPrimaryAction(
+        content = WatchingContentRef(type = type, id = id),
+        entries = entries,
+        watchedItems = watchedItems,
+        todayIsoDate = todayIsoDate,
+        preferFurthestEpisode = preferFurthestEpisode,
+        showUnairedNextUp = showUnairedNextUp,
+    )
+
+internal fun MetaDetails.seriesPrimaryAction(
+    content: WatchingContentRef,
+    entries: List<WatchProgressEntry>,
+    watchedItems: List<WatchedItem>,
+    todayIsoDate: String,
+    preferFurthestEpisode: Boolean = true,
+    showUnairedNextUp: Boolean = false,
 ): SeriesPrimaryAction? =
     decideSeriesPrimaryAction(
-        content = WatchingContentRef(type = type, id = id),
+        content = content,
         episodes = videos.map(MetaVideo::toDomainReleasedEpisode),
         progressRecords = entries.map(WatchProgressEntry::toDomainProgressRecord),
         watchedRecords = watchedItems.map(WatchedItem::toDomainWatchedRecord),
         todayIsoDate = todayIsoDate,
         preferFurthestEpisode = preferFurthestEpisode,
+        showUnairedNextUp = showUnairedNextUp,
+        defaultVideoId = defaultVideoId,
     )?.toLegacySeriesPrimaryAction()
 
 internal fun MetaVideo.playLabel(): String =
@@ -101,7 +183,11 @@ internal fun WatchProgressEntry.resumeLabel(): String =
     resumeLabel(seasonNumber = seasonNumber, episodeNumber = episodeNumber)
 
 internal fun MetaVideo.isReleasedBy(todayIsoDate: String): Boolean =
-    isReleasedBy(todayIsoDate = todayIsoDate, releasedDate = released)
+    isReleasedBy(
+        todayIsoDate = todayIsoDate,
+        releasedDate = released,
+        available = available,
+    )
 
 internal data class CompletedSeriesEpisode(
     val seasonNumber: Int,
@@ -129,6 +215,7 @@ private fun MetaVideo.toDomainReleasedEpisode(): WatchingReleasedEpisode =
         title = title,
         thumbnail = thumbnail,
         releasedDate = released,
+        available = available,
     )
 
 private fun WatchProgressEntry.toDomainProgressRecord(): WatchingProgressRecord =
@@ -149,7 +236,7 @@ private fun WatchedItem.toDomainWatchedRecord(): WatchingWatchedRecord =
         content = WatchingContentRef(type = type, id = id),
         seasonNumber = season,
         episodeNumber = episode,
-        markedAtEpochMs = markedAtEpochMs,
+        markedAtEpochMs = normalizeWatchedMarkedAtEpochMs(markedAtEpochMs),
     )
 
 private fun WatchingSeriesPrimaryAction.toLegacySeriesPrimaryAction(): SeriesPrimaryAction =

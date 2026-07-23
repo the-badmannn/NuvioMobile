@@ -28,10 +28,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,9 +52,14 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.nuvio.app.core.format.formatReleaseDateForDisplay
+import com.nuvio.app.core.ui.heroStretchHeight
+import com.nuvio.app.core.ui.heroStretchZoom
 import com.nuvio.app.features.home.MetaPreview
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import nuvio.composeapp.generated.resources.*
+import org.jetbrains.compose.resources.stringResource
 import kotlin.math.abs
 
 private const val HERO_BACKGROUND_PARALLAX = 0.055f
@@ -63,7 +71,8 @@ private const val HERO_SCROLL_UP_SCALE_MULTIPLIER = 0.002f
 private const val HERO_SCROLL_MAX_SCALE = 1.3f
 private const val HERO_SWIPE_THRESHOLD_FRACTION = 0.16f
 private const val HERO_SWIPE_VELOCITY_THRESHOLD = 300f
-private const val MOBILE_HERO_VIEWPORT_RATIO = 0.78f
+private const val HERO_AUTO_SCROLL_INTERVAL_MS = 8_000L
+private const val MOBILE_HERO_VIEWPORT_RATIO = 0.82f
 private const val MOBILE_HERO_MIN_HEIGHT_DP = 360f
 private const val MOBILE_HERO_MAX_HEIGHT_DP = 760f
 
@@ -85,12 +94,27 @@ fun HomeHeroSection(
     viewportHeight: Dp? = null,
     mobileBelowSectionHeightHint: Dp? = null,
     listState: LazyListState? = null,
+    stretchPx: () -> Float = { 0f },
     onItemClick: ((MetaPreview) -> Unit)? = null,
 ) {
     if (items.isEmpty()) return
 
     val pagerState = rememberPagerState(pageCount = { items.size })
     val coroutineScope = rememberCoroutineScope()
+    val autoScrollPage = pagerState.currentPage
+
+    LaunchedEffect(autoScrollPage, items.size) {
+        if (items.size <= 1) return@LaunchedEffect
+        delay(HERO_AUTO_SCROLL_INTERVAL_MS)
+        while (pagerState.isScrollInProgress) {
+            delay(100L)
+        }
+
+        val nextPage = (pagerState.currentPage + 1) % items.size
+        coroutineScope.launch {
+            pagerState.animateScrollToPage(nextPage)
+        }
+    }
 
     BoxWithConstraints(
         modifier = modifier
@@ -149,7 +173,7 @@ fun HomeHeroSection(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(layout.heroHeight),
+                .heroStretchHeight(layout.heroHeight, stretchPx),
         ) {
             HorizontalPager(
                 state = pagerState,
@@ -164,22 +188,29 @@ fun HomeHeroSection(
             Box(
                 modifier = Modifier.fillMaxSize(),
             ) {
-                visiblePages.forEach { layer ->
-                    AsyncImage(
-                        model = items[layer.page].banner ?: items[layer.page].poster,
-                        contentDescription = items[layer.page].name,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .graphicsLayer {
-                                alpha = layer.visibility
-                                translationX = -layer.offset * heroWidthPx * HERO_BACKGROUND_PARALLAX
-                                translationY = heroScrollTranslationY
-                                scaleX = HERO_BACKGROUND_SCALE * heroScrollScale
-                                scaleY = HERO_BACKGROUND_SCALE * heroScrollScale
-                            },
-                        alignment = if (layout.isTablet) Alignment.TopCenter else Alignment.Center,
-                        contentScale = ContentScale.Crop,
-                    )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(layout.heroHeight)
+                        .heroStretchZoom(stretchPx),
+                ) {
+                    visiblePages.forEach { layer ->
+                        AsyncImage(
+                            model = items[layer.page].banner ?: items[layer.page].poster,
+                            contentDescription = items[layer.page].name,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .graphicsLayer {
+                                    alpha = layer.visibility
+                                    translationX = -layer.offset * heroWidthPx * HERO_BACKGROUND_PARALLAX
+                                    translationY = heroScrollTranslationY
+                                    scaleX = HERO_BACKGROUND_SCALE * heroScrollScale
+                                    scaleY = HERO_BACKGROUND_SCALE * heroScrollScale
+                                },
+                            alignment = if (layout.isTablet) Alignment.TopCenter else Alignment.Center,
+                            contentScale = ContentScale.Crop,
+                        )
+                    }
                 }
 
                 Box(
@@ -256,7 +287,7 @@ fun HomeHeroSection(
                             shape = RoundedCornerShape(40.dp),
                         ) {
                             Text(
-                                text = "View Details",
+                                text = stringResource(Res.string.home_view_details),
                                 modifier = Modifier.padding(horizontal = 28.dp, vertical = 12.dp),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
@@ -345,29 +376,35 @@ private fun HeroContentBlock(
     layout: HomeHeroLayout,
     onItemClick: ((MetaPreview) -> Unit)?,
 ) {
+    var logoLoadError by remember(item.type, item.id, item.logo) {
+        mutableStateOf(false)
+    }
+    val logoUrl = item.logo?.takeIf { it.isNotBlank() }
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (layout.isTablet) Alignment.Start else Alignment.CenterHorizontally,
     ) {
-        if (item.logo != null) {
+        if (logoUrl != null && !logoLoadError) {
             AsyncImage(
-                model = item.logo,
+                model = logoUrl,
                 contentDescription = item.name,
                 modifier = Modifier
                     .fillMaxWidth(layout.logoWidthFraction)
                     .aspectRatio(2.6f)
-                    .clickable(enabled = !layout.isTablet && onItemClick != null) {
+                    .clickable(enabled = onItemClick != null) {
                         onItemClick?.invoke(item)
                     },
                 alignment = if (layout.isTablet) Alignment.CenterStart else Alignment.Center,
                 contentScale = ContentScale.Fit,
+                onError = { logoLoadError = true },
             )
         } else {
             Text(
                 text = item.name,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable(enabled = !layout.isTablet && onItemClick != null) {
+                    .clickable(enabled = onItemClick != null) {
                         onItemClick?.invoke(item)
                     },
                 style = if (layout.isTablet) {
@@ -479,14 +516,24 @@ private fun mobileHeroHeight(
     val widthFallbackHeight = (maxWidthDp * 1.16f).dp
     val baseHeight = viewportDrivenHeight ?: widthFallbackHeight
 
-    val cappedHeight = if (viewportHeightDp != null && mobileBelowSectionHeightHintDp != null) {
-        val maxAllowedFromViewport = (viewportHeightDp - mobileBelowSectionHeightHintDp).dp
+    val maxAllowedFromViewportDp = if (viewportHeightDp != null && mobileBelowSectionHeightHintDp != null) {
+        viewportHeightDp - mobileBelowSectionHeightHintDp
+    } else {
+        null
+    }
+    val cappedHeight = if (maxAllowedFromViewportDp != null) {
+        val maxAllowedFromViewport = maxAllowedFromViewportDp.dp
         baseHeight.coerceAtMost(maxAllowedFromViewport)
     } else {
         baseHeight
     }
+    val minHeight = if (maxAllowedFromViewportDp != null) {
+        minOf(MOBILE_HERO_MIN_HEIGHT_DP, maxAllowedFromViewportDp.coerceAtLeast(0f)).dp
+    } else {
+        MOBILE_HERO_MIN_HEIGHT_DP.dp
+    }
 
-    return cappedHeight.coerceIn(MOBILE_HERO_MIN_HEIGHT_DP.dp, MOBILE_HERO_MAX_HEIGHT_DP.dp)
+    return cappedHeight.coerceIn(minHeight, MOBILE_HERO_MAX_HEIGHT_DP.dp)
 }
 
 @Composable
@@ -587,9 +634,10 @@ private fun resolveHeroTargetPage(
         abs(velocityX) > HERO_SWIPE_VELOCITY_THRESHOLD
     if (!thresholdPassed) return startPage
 
+    val currentPage = startPage.coerceIn(0, itemCount - 1)
     return when {
-        totalDx > 0f -> (startPage - 1).coerceAtLeast(0)
-        totalDx < 0f -> (startPage + 1).coerceAtMost(itemCount - 1)
-        else -> startPage
+        totalDx > 0f -> if (currentPage == 0) itemCount - 1 else currentPage - 1
+        totalDx < 0f -> if (currentPage == itemCount - 1) 0 else currentPage + 1
+        else -> currentPage
     }
 }

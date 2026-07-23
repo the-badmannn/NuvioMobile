@@ -4,11 +4,15 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nuvio.app.core.ui.NuvioShelfSection
 import com.nuvio.app.core.ui.NuvioViewAllPillSize
 import com.nuvio.app.core.ui.rememberPosterCardStyleUiState
+import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 import com.nuvio.app.features.home.HomeCatalogSection
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.home.stableKey
@@ -20,6 +24,7 @@ fun HomeCatalogRowSection(
     modifier: Modifier = Modifier,
     entries: List<MetaPreview> = section.items,
     watchedKeys: Set<String> = emptySet(),
+    fullyWatchedSeriesKeys: Set<String> = emptySet(),
     sectionPadding: Dp? = null,
     onViewAllClick: (() -> Unit)? = null,
     onPosterClick: ((MetaPreview) -> Unit)? = null,
@@ -30,6 +35,7 @@ fun HomeCatalogRowSection(
             section = section,
             entries = entries,
             watchedKeys = watchedKeys,
+            fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
             modifier = modifier.fillMaxWidth(),
             sectionPadding = sectionPadding,
             onViewAllClick = onViewAllClick,
@@ -42,6 +48,7 @@ fun HomeCatalogRowSection(
                 section = section,
                 entries = entries,
                 watchedKeys = watchedKeys,
+                fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
                 modifier = Modifier.fillMaxWidth(),
                 sectionPadding = homeSectionHorizontalPaddingForWidth(maxWidth.value),
                 onViewAllClick = onViewAllClick,
@@ -57,6 +64,7 @@ private fun HomeCatalogRowSectionContent(
     section: HomeCatalogSection,
     entries: List<MetaPreview>,
     watchedKeys: Set<String>,
+    fullyWatchedSeriesKeys: Set<String>,
     modifier: Modifier,
     sectionPadding: Dp,
     onViewAllClick: (() -> Unit)?,
@@ -64,6 +72,10 @@ private fun HomeCatalogRowSectionContent(
     onPosterLongClick: ((MetaPreview) -> Unit)?,
 ) {
     val posterCardStyle = rememberPosterCardStyleUiState()
+    val homeCatalogSettings by remember {
+        HomeCatalogSettingsRepository.snapshot()
+        HomeCatalogSettingsRepository.uiState
+    }.collectAsStateWithLifecycle()
 
     NuvioShelfSection(
         title = section.title,
@@ -71,6 +83,7 @@ private fun HomeCatalogRowSectionContent(
         modifier = modifier,
         headerHorizontalPadding = sectionPadding,
         rowContentPadding = PaddingValues(horizontal = sectionPadding),
+        showHeaderAccent = !homeCatalogSettings.hideCatalogUnderline,
         onViewAllClick = onViewAllClick,
         viewAllPillSize = NuvioViewAllPillSize.Compact,
         key = { item -> item.stableKey() },
@@ -81,6 +94,7 @@ private fun HomeCatalogRowSectionContent(
             isWatched = WatchingState.isPosterWatched(
                 watchedKeys = watchedKeys,
                 item = item,
+                fullyWatchedSeriesKeys = fullyWatchedSeriesKeys,
             ),
             onClick = onPosterClick?.let { { it(item) } },
             onLongClick = onPosterLongClick?.let { { it(item) } },

@@ -11,11 +11,20 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nuvio.app.core.ui.NuvioScreen
 import com.nuvio.app.core.ui.NuvioScreenHeader
 import com.nuvio.app.features.addons.AddonRepository
+import com.nuvio.app.features.addons.enabledAddons
 import com.nuvio.app.features.collection.CollectionRepository
 import com.nuvio.app.features.details.MetaScreenSettingsRepository
 import com.nuvio.app.features.plugins.PluginRepository
 import com.nuvio.app.features.home.HomeCatalogSettingsRepository
 import com.nuvio.app.features.watchprogress.ContinueWatchingPreferencesRepository
+import nuvio.composeapp.generated.resources.Res
+import nuvio.composeapp.generated.resources.compose_settings_page_account
+import nuvio.composeapp.generated.resources.compose_settings_page_addons
+import nuvio.composeapp.generated.resources.compose_settings_page_continue_watching
+import nuvio.composeapp.generated.resources.compose_settings_page_homescreen
+import nuvio.composeapp.generated.resources.compose_settings_page_meta_screen
+import nuvio.composeapp.generated.resources.compose_settings_page_plugins
+import org.jetbrains.compose.resources.stringResource
 
 @Composable
 fun HomescreenSettingsScreen(
@@ -23,10 +32,11 @@ fun HomescreenSettingsScreen(
 ) {
     val addonsUiState by AddonRepository.uiState.collectAsStateWithLifecycle()
     val homescreenCatalogRefreshKey = remember(addonsUiState.addons) {
-        val allManifestsSettled = addonsUiState.addons.isNotEmpty() &&
-            addonsUiState.addons.none { it.isRefreshing }
+        val enabledAddons = addonsUiState.addons.enabledAddons()
+        val allManifestsSettled = enabledAddons.isNotEmpty() &&
+            enabledAddons.none { it.isRefreshing }
         if (!allManifestsSettled) return@remember emptyList<String>()
-        addonsUiState.addons.mapNotNull { addon ->
+        enabledAddons.mapNotNull { addon ->
             val manifest = addon.manifest ?: return@mapNotNull null
             buildString {
                 append(manifest.transportUrl)
@@ -37,7 +47,10 @@ fun HomescreenSettingsScreen(
             }
         }
     }
-    val homescreenSettingsUiState by HomeCatalogSettingsRepository.uiState.collectAsStateWithLifecycle()
+    val homescreenSettingsUiState by remember {
+        HomeCatalogSettingsRepository.snapshot()
+        HomeCatalogSettingsRepository.uiState
+    }.collectAsStateWithLifecycle()
     val collections by CollectionRepository.collections.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
@@ -47,7 +60,7 @@ fun HomescreenSettingsScreen(
 
     LaunchedEffect(homescreenCatalogRefreshKey) {
         if (homescreenCatalogRefreshKey.isEmpty()) return@LaunchedEffect
-        HomeCatalogSettingsRepository.syncCatalogs(addonsUiState.addons)
+        HomeCatalogSettingsRepository.syncCatalogs(addonsUiState.addons.enabledAddons())
     }
 
     LaunchedEffect(collections) {
@@ -59,13 +72,16 @@ fun HomescreenSettingsScreen(
     ) {
         stickyHeader {
             NuvioScreenHeader(
-                title = "Homescreen",
+                title = stringResource(Res.string.compose_settings_page_homescreen),
                 onBack = onBack,
             )
         }
         homescreenSettingsContent(
             isTablet = false,
             heroEnabled = homescreenSettingsUiState.heroEnabled,
+            showCatalogType = homescreenSettingsUiState.showCatalogType,
+            hideUnreleasedContent = homescreenSettingsUiState.hideUnreleasedContent,
+            hideCatalogUnderline = homescreenSettingsUiState.hideCatalogUnderline,
             items = homescreenSettingsUiState.items,
         )
     }
@@ -85,7 +101,7 @@ fun MetaScreenSettingsScreen(
     ) {
         stickyHeader {
             NuvioScreenHeader(
-                title = "Meta Screen",
+                title = stringResource(Res.string.compose_settings_page_meta_screen),
                 onBack = onBack,
             )
         }
@@ -110,7 +126,7 @@ fun ContinueWatchingSettingsScreen(
     ) {
         stickyHeader {
             NuvioScreenHeader(
-                title = "Continue Watching",
+                title = stringResource(Res.string.compose_settings_page_continue_watching),
                 onBack = onBack,
             )
         }
@@ -119,7 +135,11 @@ fun ContinueWatchingSettingsScreen(
             isVisible = continueWatchingPreferencesUiState.isVisible,
             style = continueWatchingPreferencesUiState.style,
             upNextFromFurthestEpisode = continueWatchingPreferencesUiState.upNextFromFurthestEpisode,
+            useEpisodeThumbnails = continueWatchingPreferencesUiState.useEpisodeThumbnails,
+            showUnairedNextUp = continueWatchingPreferencesUiState.showUnairedNextUp,
+            blurNextUp = continueWatchingPreferencesUiState.blurNextUp,
             showResumePromptOnLaunch = continueWatchingPreferencesUiState.showResumePromptOnLaunch,
+            sortMode = continueWatchingPreferencesUiState.sortMode,
         )
     }
 }
@@ -137,7 +157,7 @@ fun AddonsSettingsScreen(
     ) {
         stickyHeader {
             NuvioScreenHeader(
-                title = "Addons",
+                title = stringResource(Res.string.compose_settings_page_addons),
                 onBack = onBack,
             )
         }
@@ -163,7 +183,7 @@ fun PluginsSettingsScreen(
     ) {
         stickyHeader {
             NuvioScreenHeader(
-                title = "Plugins",
+                title = stringResource(Res.string.compose_settings_page_plugins),
                 onBack = onBack,
             )
         }
@@ -180,7 +200,7 @@ fun AccountSettingsScreen(
     ) {
         stickyHeader {
             NuvioScreenHeader(
-                title = "Account",
+                title = stringResource(Res.string.compose_settings_page_account),
                 onBack = onBack,
             )
         }

@@ -1,74 +1,48 @@
 package com.nuvio.app.features.settings
 
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CollectionsBookmark
-import androidx.compose.material.icons.rounded.Extension
-import androidx.compose.material.icons.rounded.Home
-import androidx.compose.material.icons.rounded.Hub
-import androidx.compose.material.icons.rounded.Tune
+import com.nuvio.app.core.build.AppFeaturePolicy
+import nuvio.composeapp.generated.resources.Res
+import nuvio.composeapp.generated.resources.compose_settings_page_addons
+import nuvio.composeapp.generated.resources.compose_settings_page_plugins
+import nuvio.composeapp.generated.resources.settings_content_discovery_addons_description
+import nuvio.composeapp.generated.resources.settings_content_discovery_addons_description_appstore
+import nuvio.composeapp.generated.resources.settings_content_discovery_plugins_description
+import nuvio.composeapp.generated.resources.settings_content_discovery_section_sources
+import org.jetbrains.compose.resources.stringResource
 
 internal fun LazyListScope.contentDiscoveryContent(
     isTablet: Boolean,
     showPluginsEntry: Boolean,
     onAddonsClick: () -> Unit,
     onPluginsClick: () -> Unit,
-    onHomescreenClick: () -> Unit,
-    onMetaScreenClick: () -> Unit,
-    onCollectionsClick: () -> Unit = {},
 ) {
     item {
         SettingsSection(
-            title = "SOURCES",
+            title = stringResource(Res.string.settings_content_discovery_section_sources),
             isTablet = isTablet,
         ) {
             SettingsGroup(isTablet = isTablet) {
                 SettingsNavigationRow(
-                    title = "Addons",
-                    description = "Install, remove, refresh, and sort your content sources.",
-                    icon = Icons.Rounded.Extension,
+                    title = stringResource(Res.string.compose_settings_page_addons),
+                    description = stringResource(
+                        if (AppFeaturePolicy.personalMediaAddonCopyEnabled) {
+                            Res.string.settings_content_discovery_addons_description_appstore
+                        } else {
+                            Res.string.settings_content_discovery_addons_description
+                        },
+                    ),
                     isTablet = isTablet,
                     onClick = onAddonsClick,
                 )
                 if (showPluginsEntry) {
                     SettingsNavigationRow(
-                        title = "Plugins",
-                        description = "Install JavaScript scraper repositories and test providers internally.",
-                        icon = Icons.Rounded.Hub,
+                        title = stringResource(Res.string.compose_settings_page_plugins),
+                        description = stringResource(Res.string.settings_content_discovery_plugins_description),
                         isTablet = isTablet,
                         onClick = onPluginsClick,
                     )
                 }
-            }
-        }
-    }
-    item {
-        SettingsSection(
-            title = "HOME",
-            isTablet = isTablet,
-        ) {
-            SettingsGroup(isTablet = isTablet) {
-                SettingsNavigationRow(
-                    title = "Homescreen",
-                    description = "Control which catalogs appear on Home and in what order.",
-                    icon = Icons.Rounded.Home,
-                    isTablet = isTablet,
-                    onClick = onHomescreenClick,
-                )
-                SettingsNavigationRow(
-                    title = "Meta Screen",
-                    description = "Disable detail sections and reorder everything below Hero.",
-                    icon = Icons.Rounded.Tune,
-                    isTablet = isTablet,
-                    onClick = onMetaScreenClick,
-                )
-                SettingsNavigationRow(
-                    title = "Collections",
-                    description = "Create custom catalog groupings with folders shown on Home.",
-                    icon = Icons.Rounded.CollectionsBookmark,
-                    isTablet = isTablet,
-                    onClick = onCollectionsClick,
-                )
             }
         }
     }

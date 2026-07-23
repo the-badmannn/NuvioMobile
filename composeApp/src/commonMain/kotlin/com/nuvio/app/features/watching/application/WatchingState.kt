@@ -3,20 +3,27 @@ package com.nuvio.app.features.watching.application
 import com.nuvio.app.features.details.MetaVideo
 import com.nuvio.app.features.home.MetaPreview
 import com.nuvio.app.features.watched.WatchedItem
+import com.nuvio.app.features.watched.normalizeWatchedMarkedAtEpochMs
 import com.nuvio.app.features.watched.watchedItemKey
 import com.nuvio.app.features.watchprogress.WatchProgressEntry
+import com.nuvio.app.features.watchprogress.continueWatchingEntries
+import com.nuvio.app.features.watchprogress.shouldUseAsCompletedSeedForContinueWatching
 import com.nuvio.app.features.watching.domain.WatchingCompletedEpisode
 import com.nuvio.app.features.watching.domain.WatchingContentRef
 import com.nuvio.app.features.watching.domain.WatchingProgressRecord
 import com.nuvio.app.features.watching.domain.WatchingWatchedRecord
-import com.nuvio.app.features.watching.domain.continueWatchingProgressEntries
 import com.nuvio.app.features.watching.domain.latestCompletedSeriesEpisode
 
 object WatchingState {
     fun isPosterWatched(
         watchedKeys: Set<String>,
         item: MetaPreview,
-    ): Boolean = watchedKeys.contains(watchedItemKey(item.type, item.id))
+        fullyWatchedSeriesKeys: Set<String> = emptySet(),
+    ): Boolean {
+        val posterKey = watchedItemKey(item.type, item.id)
+        if (watchedKeys.contains(posterKey)) return true
+        return item.type.isSeriesLikePosterType() && fullyWatchedSeriesKeys.contains(posterKey)
+    }
 
     fun isEpisodeWatched(
         watchedKeys: Set<String>,
@@ -59,7 +66,9 @@ object WatchingState {
                 add(WatchingContentRef(type = item.type, id = item.id))
             }
         }
-        val progressRecords = progressEntries.map(WatchProgressEntry::toDomainProgressRecord)
+        val progressRecords = progressEntries
+            .filter { entry -> entry.shouldUseAsCompletedSeedForContinueWatching() }
+            .map(WatchProgressEntry::toDomainProgressRecord)
         val watchedRecords = watchedItems.map(WatchedItem::toDomainWatchedRecord)
         return contentRefs.mapNotNull { content ->
             latestCompletedSeriesEpisode(
@@ -73,22 +82,13 @@ object WatchingState {
 
     fun visibleContinueWatchingEntries(
         progressEntries: List<WatchProgressEntry>,
+        @Suppress("UNUSED_PARAMETER")
         latestCompletedBySeries: Map<WatchingContentRef, WatchingCompletedEpisode>,
-    ): List<WatchProgressEntry> {
-        val visibleIds = continueWatchingProgressEntries(
-            progressRecords = progressEntries.map(WatchProgressEntry::toDomainProgressRecord),
-        )
-            .filter { record ->
-                val latestCompleted = latestCompletedBySeries[record.content]
-                latestCompleted == null || record.lastUpdatedEpochMs > latestCompleted.markedAtEpochMs
-            }
-            .mapTo(linkedSetOf()) { record -> record.videoId }
-
-        return progressEntries
-            .filter { entry -> entry.videoId in visibleIds }
-            .sortedByDescending { entry -> entry.lastUpdatedEpochMs }
-    }
+    ): List<WatchProgressEntry> = progressEntries.continueWatchingEntries()
 }
+
+private fun String.isSeriesLikePosterType(): Boolean =
+    trim().lowercase() in setOf("series", "show", "tv", "tvshow")
 
 private fun WatchProgressEntry.toDomainProgressRecord(): WatchingProgressRecord =
     normalizedCompletion().let { entry ->
@@ -110,5 +110,5 @@ private fun WatchedItem.toDomainWatchedRecord(): WatchingWatchedRecord =
         content = WatchingContentRef(type = type, id = id),
         seasonNumber = season,
         episodeNumber = episode,
-        markedAtEpochMs = markedAtEpochMs,
+        markedAtEpochMs = normalizeWatchedMarkedAtEpochMs(markedAtEpochMs),
     )

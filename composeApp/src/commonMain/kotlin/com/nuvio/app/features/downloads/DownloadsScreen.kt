@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
@@ -35,25 +36,33 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.nuvio.app.core.i18n.localizedByteUnit
 import com.nuvio.app.core.ui.NuvioScreen
 import com.nuvio.app.core.ui.NuvioScreenHeader
+import com.nuvio.app.core.ui.NuvioToastController
+import nuvio.composeapp.generated.resources.*
+import org.jetbrains.compose.resources.stringResource
 
 @Composable
 fun DownloadsScreen(
     onBack: () -> Unit,
     onOpenDownload: (DownloadItem) -> Unit,
+    initialShowId: String? = null,
+    onNavigateToShow: ((showId: String, title: String) -> Unit)? = null,
+    onBackFromShow: (() -> Unit)? = null,
 ) {
     val uiState by remember {
         DownloadsRepository.ensureLoaded()
         DownloadsRepository.uiState
     }.collectAsStateWithLifecycle()
 
-    var selectedShowId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedShowId by rememberSaveable(initialShowId) { mutableStateOf(initialShowId) }
+    val openDownloadsDirectoryFailedText = stringResource(Res.string.downloads_open_directory_failed)
 
     val completedEpisodes = remember(uiState.items) {
         uiState.completedItems
             .filter { it.isEpisode }
-            .sortedByDescending { it.updatedAtEpochMs }
+            .sortedForSeriesDownloads()
     }
 
     val selectedShowTitle = remember(selectedShowId, completedEpisodes) {
@@ -66,15 +75,29 @@ fun DownloadsScreen(
         stickyHeader {
             NuvioScreenHeader(
                 title = if (selectedShowId == null) {
-                    "Downloads"
+                    stringResource(Res.string.compose_settings_root_downloads_title)
                 } else {
-                    selectedShowTitle ?: "Show Downloads"
+                    selectedShowTitle ?: stringResource(Res.string.downloads_show_downloads)
                 },
                 onBack = {
                     if (selectedShowId != null) {
-                        selectedShowId = null
+                        onBackFromShow?.invoke() ?: run { selectedShowId = null }
                     } else {
                         onBack()
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = {
+                            if (!DownloadsPlatformDownloader.openDownloadsDirectory()) {
+                                NuvioToastController.show(openDownloadsDirectoryFailedText)
+                            }
+                        },
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Folder,
+                            contentDescription = stringResource(Res.string.downloads_open_directory),
+                        )
                     }
                 },
             )
@@ -84,7 +107,9 @@ fun DownloadsScreen(
             downloadsRootContent(
                 uiState = uiState,
                 onOpenDownload = onOpenDownload,
-                onOpenShow = { showId -> selectedShowId = showId },
+                onOpenShow = { showId, title ->
+                    onNavigateToShow?.invoke(showId, title) ?: run { selectedShowId = showId }
+                },
             )
         } else {
             downloadsShowContent(
@@ -99,7 +124,7 @@ fun DownloadsScreen(
 private fun LazyListScope.downloadsRootContent(
     uiState: DownloadsUiState,
     onOpenDownload: (DownloadItem) -> Unit,
-    onOpenShow: (String) -> Unit,
+    onOpenShow: (showId: String, title: String) -> Unit,
 ) {
     val activeItems = uiState.activeItems
     val completedMovies = uiState.completedItems.filterNot(DownloadItem::isEpisode)
@@ -115,7 +140,7 @@ private fun LazyListScope.downloadsRootContent(
 
     if (activeItems.isNotEmpty()) {
         item {
-            SectionTitle("ACTIVE")
+            SectionTitle(stringResource(Res.string.downloads_section_active))
         }
         items(
             items = activeItems,
@@ -134,7 +159,7 @@ private fun LazyListScope.downloadsRootContent(
 
     if (completedMovies.isNotEmpty()) {
         item {
-            SectionTitle("MOVIES")
+            SectionTitle(stringResource(Res.string.downloads_section_movies))
         }
         items(
             items = completedMovies,
@@ -153,7 +178,7 @@ private fun LazyListScope.downloadsRootContent(
 
     if (completedShows.isNotEmpty()) {
         item {
-            SectionTitle("SHOWS")
+            SectionTitle(stringResource(Res.string.downloads_section_shows))
         }
         items(
             items = completedShows,
@@ -163,7 +188,7 @@ private fun LazyListScope.downloadsRootContent(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 6.dp)
-                    .clickable { onOpenShow(item.parentMetaId) },
+                    .clickable { onOpenShow(item.parentMetaId, item.title) },
                 shape = MaterialTheme.shapes.medium,
                 color = MaterialTheme.colorScheme.surfaceContainer,
             ) {
@@ -186,7 +211,7 @@ private fun LazyListScope.downloadsRootContent(
                             overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            text = "${episodes.size} downloaded episode${if (episodes.size == 1) "" else "s"}",
+                            text = stringResource(Res.string.downloads_episode_count, episodes.size),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -210,7 +235,7 @@ private fun LazyListScope.downloadsRootContent(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "No downloads yet",
+                    text = stringResource(Res.string.downloads_empty_title),
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -226,6 +251,7 @@ private fun LazyListScope.downloadsShowContent(
 ) {
     val showEpisodes = episodes
         .filter { it.parentMetaId == showId }
+        .sortedForSeriesDownloads()
 
     val seasons = showEpisodes
         .groupBy { it.seasonNumber ?: 0 }
@@ -245,7 +271,7 @@ private fun LazyListScope.downloadsShowContent(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "No completed episodes",
+                    text = stringResource(Res.string.downloads_empty_episodes),
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -255,19 +281,17 @@ private fun LazyListScope.downloadsShowContent(
     }
 
     seasons.forEach { (seasonNumber, entries) ->
-        val seasonTitle = if (seasonNumber == 0) {
-            "Specials"
-        } else {
-            "Season $seasonNumber"
-        }
         item {
-            SectionTitle(seasonTitle)
+            SectionTitle(
+                if (seasonNumber == 0) {
+                    stringResource(Res.string.episodes_specials)
+                } else {
+                    stringResource(Res.string.episodes_season, seasonNumber)
+                },
+            )
         }
 
-        val sortedEpisodes = entries.sortedWith(
-            compareBy<DownloadItem> { it.episodeNumber ?: Int.MAX_VALUE }
-                .thenByDescending { it.updatedAtEpochMs },
-        )
+        val sortedEpisodes = entries.sortedForSeriesDownloads()
 
         items(
             items = sortedEpisodes,
@@ -294,6 +318,12 @@ private fun DownloadRow(
     onRetry: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val displayTitle = item.displayTitle()
+    val displaySubtitle = downloadDisplaySubtitle(
+        item = item,
+        displayTitle = displayTitle,
+    )
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -318,7 +348,7 @@ private fun DownloadRow(
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Text(
-                        text = item.title,
+                        text = displayTitle,
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.SemiBold,
@@ -326,7 +356,7 @@ private fun DownloadRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        text = item.displaySubtitle,
+                        text = displaySubtitle,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -345,7 +375,7 @@ private fun DownloadRow(
                             IconButton(onClick = onPause) {
                                 Icon(
                                     imageVector = Icons.Rounded.Pause,
-                                    contentDescription = "Pause",
+                                    contentDescription = stringResource(Res.string.compose_action_pause),
                                 )
                             }
                         }
@@ -353,7 +383,7 @@ private fun DownloadRow(
                             IconButton(onClick = onResume) {
                                 Icon(
                                     imageVector = Icons.Rounded.PlayArrow,
-                                    contentDescription = "Resume",
+                                    contentDescription = stringResource(Res.string.action_resume),
                                 )
                             }
                         }
@@ -361,7 +391,7 @@ private fun DownloadRow(
                             IconButton(onClick = onRetry) {
                                 Icon(
                                     imageVector = Icons.Rounded.Refresh,
-                                    contentDescription = "Retry",
+                                    contentDescription = stringResource(Res.string.action_retry),
                                 )
                             }
                         }
@@ -369,7 +399,7 @@ private fun DownloadRow(
                             IconButton(onClick = onOpen) {
                                 Icon(
                                     imageVector = Icons.Rounded.PlayArrow,
-                                    contentDescription = "Play",
+                                    contentDescription = stringResource(Res.string.action_play),
                                 )
                             }
                         }
@@ -377,7 +407,7 @@ private fun DownloadRow(
                     IconButton(onClick = onDelete) {
                         Icon(
                             imageVector = Icons.Rounded.Delete,
-                            contentDescription = "Delete",
+                            contentDescription = stringResource(Res.string.action_delete),
                         )
                     }
                 }
@@ -399,6 +429,36 @@ private fun DownloadRow(
     }
 }
 
+private fun DownloadItem.displayTitle(): String =
+    if (isEpisode) {
+        episodeTitle?.trim()?.takeIf { it.isNotBlank() } ?: title
+    } else {
+        title
+    }
+
+@Composable
+private fun downloadDisplaySubtitle(
+    item: DownloadItem,
+    displayTitle: String,
+): String {
+    val seasonNumber = item.seasonNumber
+    val episodeNumber = item.episodeNumber
+    if (seasonNumber == null || episodeNumber == null) {
+        return item.displaySubtitle
+    }
+
+    val episodeCode = stringResource(
+        Res.string.compose_player_episode_code_full,
+        seasonNumber,
+        episodeNumber,
+    )
+    return listOf(
+        episodeCode,
+        item.episodeTitle?.trim().orEmpty().takeIf { it.isNotBlank() && it != displayTitle },
+        item.title.trim().takeIf { it.isNotBlank() && it != displayTitle },
+    ).filterNotNull().joinToString(" • ")
+}
+
 @Composable
 private fun SectionTitle(title: String) {
     Text(
@@ -410,6 +470,7 @@ private fun SectionTitle(title: String) {
     )
 }
 
+@Composable
 private fun statusText(item: DownloadItem): String {
     val size = if (item.totalBytes != null && item.totalBytes > 0L) {
         "${formatBytes(item.downloadedBytes)} / ${formatBytes(item.totalBytes)}"
@@ -418,23 +479,26 @@ private fun statusText(item: DownloadItem): String {
     }
 
     return when (item.status) {
-        DownloadStatus.Downloading -> "Downloading • $size"
-        DownloadStatus.Paused -> "Paused • $size"
-        DownloadStatus.Completed -> "Completed • ${formatBytes(item.totalBytes ?: item.downloadedBytes)}"
-        DownloadStatus.Failed -> item.errorMessage ?: "Failed"
+        DownloadStatus.Downloading -> stringResource(Res.string.downloads_status_downloading, size)
+        DownloadStatus.Paused -> stringResource(Res.string.downloads_status_paused, size)
+        DownloadStatus.Completed -> stringResource(
+            Res.string.downloads_status_completed,
+            formatBytes(item.totalBytes ?: item.downloadedBytes),
+        )
+        DownloadStatus.Failed -> item.errorMessage ?: stringResource(Res.string.downloads_status_failed)
     }
 }
 
 private fun formatBytes(bytes: Long): String {
-    if (bytes <= 0L) return "0 B"
+    if (bytes <= 0L) return "0 ${localizedByteUnit("B")}"
     val kib = 1024.0
     val mib = kib * 1024.0
     val gib = mib * 1024.0
     val value = bytes.toDouble()
     return when {
-        value >= gib -> "${((value / gib) * 10.0).toInt() / 10.0} GB"
-        value >= mib -> "${((value / mib) * 10.0).toInt() / 10.0} MB"
-        value >= kib -> "${((value / kib) * 10.0).toInt() / 10.0} KB"
-        else -> "$bytes B"
+        value >= gib -> "${((value / gib) * 10.0).toInt() / 10.0} ${localizedByteUnit("GB")}"
+        value >= mib -> "${((value / mib) * 10.0).toInt() / 10.0} ${localizedByteUnit("MB")}"
+        value >= kib -> "${((value / kib) * 10.0).toInt() / 10.0} ${localizedByteUnit("KB")}"
+        else -> "$bytes ${localizedByteUnit("B")}"
     }
 }

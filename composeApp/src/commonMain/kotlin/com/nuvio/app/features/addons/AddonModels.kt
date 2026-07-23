@@ -1,5 +1,10 @@
 package com.nuvio.app.features.addons
 
+import kotlinx.coroutines.runBlocking
+import nuvio.composeapp.generated.resources.Res
+import nuvio.composeapp.generated.resources.generic_addon
+import org.jetbrains.compose.resources.getString
+
 data class AddonManifest(
     val id: String,
     val name: String,
@@ -45,16 +50,19 @@ data class ManagedAddon(
     val manifestUrl: String,
     val manifest: AddonManifest? = null,
     val userSetName: String? = null,
+    val enabled: Boolean = true,
     val isRefreshing: Boolean = false,
     val errorMessage: String? = null,
 ) {
     val isActive: Boolean
-        get() = manifest != null
+        get() = enabled && manifest != null
 
     val displayTitle: String
         get() = userSetName?.takeIf { it.isNotBlank() && it != manifest?.name }
             ?: manifest?.name
-            ?: manifestUrl.substringBefore("?").substringAfterLast("/").ifBlank { "Addon" }
+            ?: manifestUrl.substringBefore("?").substringAfterLast("/").ifBlank {
+                runBlocking { getString(Res.string.generic_addon) }
+            }
 }
 
 data class AddonsUiState(
@@ -71,8 +79,11 @@ internal fun List<ManagedAddon>.toOverview(): AddonOverview =
     AddonOverview(
         totalAddons = size,
         activeAddons = count { it.isActive },
-        totalCatalogs = sumOf { it.manifest?.catalogs?.size ?: 0 },
+        totalCatalogs = filter { it.enabled }.sumOf { it.manifest?.catalogs?.size ?: 0 },
     )
+
+internal fun List<ManagedAddon>.enabledAddons(): List<ManagedAddon> =
+    filter { it.enabled }
 
 sealed interface AddAddonResult {
     data class Success(val manifest: AddonManifest) : AddAddonResult

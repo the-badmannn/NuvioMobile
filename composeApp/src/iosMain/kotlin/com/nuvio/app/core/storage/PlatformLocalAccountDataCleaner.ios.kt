@@ -3,7 +3,12 @@ package com.nuvio.app.core.storage
 import platform.Foundation.NSUserDefaults
 
 internal actual object PlatformLocalAccountDataCleaner {
-    private val plainKeys = listOf("profile_payload")
+    private val plainKeys = listOf(
+        "profile_payload",
+        "avatar_catalog_payload",
+        "anonymous_user_id",
+    )
+    private val profilePinCachePrefixes = listOf("profile_pin_cache_")
     private val profileIndexedPrefixes = listOf(
         "installed_manifest_urls_",
         "plugins_state_",
@@ -30,6 +35,13 @@ internal actual object PlatformLocalAccountDataCleaner {
         "subtitle_bottom_offset",
         "stream_reuse_last_link_enabled",
         "stream_reuse_last_link_cache_hours",
+        "stream_badge_rules",
+        "show_file_size_badges",
+        "stream_badge_placement",
+        "debrid_stream_badge_rules",
+        "p2p_enabled",
+        "enable_upload",
+        "hide_torrent_stats",
         "mdblist_enabled",
         "mdblist_api_key",
         "mdblist_use_imdb",
@@ -40,6 +52,12 @@ internal actual object PlatformLocalAccountDataCleaner {
         "mdblist_use_letterboxd",
         "mdblist_use_audience",
         "trakt_auth_payload",
+        "trakt_library_payload",
+        "trakt_settings_payload",
+        "library_display_settings_payload",
+        "pending_watch_progress_source",
+        "collection_mobile_settings_payload",
+        "collections_payload",
     )
 
     actual fun wipe() {
@@ -51,6 +69,9 @@ internal actual object PlatformLocalAccountDataCleaner {
             profileIndexedPrefixes.forEach { prefix ->
                 defaults.removeObjectForKey("$prefix$profileId")
             }
+            profilePinCachePrefixes.forEach { prefix ->
+                defaults.removeObjectForKey("$prefix$profileId")
+            }
             profileScopedBaseKeys.forEach { baseKey ->
                 defaults.removeObjectForKey("${baseKey}_$profileId")
             }
@@ -58,7 +79,10 @@ internal actual object PlatformLocalAccountDataCleaner {
 
         for (key in defaults.dictionaryRepresentation().keys) {
             val keyString = key as? String ?: continue
-            if (keyString.startsWith("stream_link_")) {
+            if (
+                keyString.startsWith("stream_link_") ||
+                keyString.startsWith("cw_enrichment_cache_")
+            ) {
                 defaults.removeObjectForKey(keyString)
             }
         }
